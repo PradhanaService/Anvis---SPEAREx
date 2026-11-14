@@ -138,7 +138,8 @@ function render() {
   const wl = f.cut && f.cut.wavelength_um ? `λ ≈ ${f.cut.wavelength_um.toFixed(3)} µm` : "";
   $("info").innerHTML =
     `Frame ${where} · ${f.date} UTC · MJD ${f.mjd.toFixed(4)}<br>` +
-    `${wl}${wl ? " · " : ""}${f.obs_id} · ${f.collection}`;
+    `${wl}${wl ? " · " : ""}${f.obs_id} · ${f.collection}<br>` +
+    `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
 
   if (!f.cut) {
     ctx.fillStyle = "#888";
