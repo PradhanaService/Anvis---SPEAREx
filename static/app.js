@@ -157,20 +157,91 @@ function render() {
   if (hi <= lo) hi = lo + 1e-6;
   const invert = $("invert").checked;
 
-  const img = new ImageData(w, h);
-  for (let i = 0; i < data.length; i++) {
-    const v = data[i];
-    let g;
-    if (v === null) { img.data.set([150, 120, 120, 255], i * 4); continue; } // no data
-    g = Math.round(255 * Math.min(1, Math.max(0, (v - lo) / (hi - lo))));
-    if (invert) g = 255 - g;
-    img.data.set([g, g, g, 255], i * 4);
+  // Draw at the canvas's real on-screen resolution so the picture stays sharp.
+  const S = Math.min(1024, Math.round(zoom * (window.devicePixelRatio || 1)));
+  if (canvas.width !== S) { canvas.width = S; canvas.height = S; }
+  ctx.putImageData(drawFrame(w, h, data, lo, hi, invert, S), 0, 0);
+}
+
+// Display stretch: an asinh curve between the min and max brightness levels. Compared with a
+// straight line it lifts faint structure out of the background without saturating bright cores.
+const STRETCH = 8;
+const STRETCH_NORM = Math.asinh(STRETCH);
+
+// Catmull-Rom (bicubic) weights for a sample at fraction t between pixels 0 and 1.
+function cubicWeights(t) {
+  const t2 = t * t, t3 = t2 * t;
+  return [(-t3 + 2 * t2 - t) / 2, (3 * t3 - 5 * t2 + 2) / 2, (-3 * t3 + 4 * t2 + t) / 2, (t3 - t2) / 2];
+}
+
+// For each output position along one axis: the 4 source indices and their weights.
+function cubicTaps(n, S) {
+  const idx = new Int32Array(S * 4), wts = new Float32Array(S * 4);
+  for (let o = 0; o < S; o++) {
+    const u = ((o + 0.5) * n) / S - 0.5;
+    const i0 = Math.floor(u);
+    const wt = cubicWeights(u - i0);
+    for (let k = 0; k < 4; k++) {
+      idx[o * 4 + k] = Math.min(n - 1, Math.max(0, i0 - 1 + k));
+      wts[o * 4 + k] = wt[k];
+    }
   }
-  const off = document.createElement("canvas");
-  off.width = w; off.height = h;
-  off.getContext("2d").putImageData(img, 0, 0);
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, 0, 0, canvas.width, canvas.height);
+  return { idx, wts };
+}
+
+// Smoothly upsample the w x h frame to S x S (bicubic), then apply the display stretch.
+function drawFrame(w, h, data, lo, hi, invert, S) {
+  // Pixels with no data take the value of their nearest valid neighbour, so they don't
+  // smear dark rings into the interpolation; they are still drawn as "no data" below.
+  const vals = new Float32Array(w * h);
+  const valid = data.map((v) => v !== null);
+  for (let i = 0; i < data.length; i++) vals[i] = valid[i] ? data[i] : lo;
+  for (let pass = 0; pass < 3; pass++) {
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const i = y * w + x;
+      if (valid[i]) continue;
+      const nb = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].find(
+        ([a, b]) => a >= 0 && b >= 0 && a < w && b < h && valid[b * w + a]);
+      if (nb) vals[i] = vals[nb[1] * w + nb[0]];
+    }
+  }
+
+  // Separable bicubic: rows first (h x S), then columns (S x S).
+  const tx = cubicTaps(w, S), ty = cubicTaps(h, S);
+  const rows = new Float32Array(h * S);
+  for (let y = 0; y < h; y++) for (let o = 0; o < S; o++) {
+    let s = 0;
+    for (let k = 0; k < 4; k++) s += vals[y * w + tx.idx[o * 4 + k]] * tx.wts[o * 4 + k];
+    // Keep within the two nearest pixels' values: no bright/dark halos around stars.
+    const a = vals[y * w + tx.idx[o * 4 + 1]], b = vals[y * w + tx.idx[o * 4 + 2]];
+    rows[y * S + o] = Math.min(Math.max(s, Math.min(a, b)), Math.max(a, b));
+  }
+
+  const img = new ImageData(S, S);
+  const range = hi - lo;
+  for (let oy = 0; oy < S; oy++) {
+    const y1 = ty.idx[oy * 4 + 1], y2 = ty.idx[oy * 4 + 2];
+    const fy = Math.min(1, Math.max(0, ((oy + 0.5) * h) / S - 0.5 - y1));
+    for (let ox = 0; ox < S; ox++) {
+      const p = (oy * S + ox) * 4;
+      // No-data areas: threshold a bilinear blend of the valid-pixel mask, for rounded edges.
+      const x1 = tx.idx[ox * 4 + 1], x2 = tx.idx[ox * 4 + 2];
+      const fx = Math.min(1, Math.max(0, ((ox + 0.5) * w) / S - 0.5 - x1));
+      const cover = (valid[y1 * w + x1] * (1 - fx) + valid[y1 * w + x2] * fx) * (1 - fy) +
+                    (valid[y2 * w + x1] * (1 - fx) + valid[y2 * w + x2] * fx) * fy;
+      if (cover < 0.5) { img.data[p] = 150; img.data[p + 1] = 120; img.data[p + 2] = 120; img.data[p + 3] = 255; continue; } // no data
+      let v = 0;
+      for (let k = 0; k < 4; k++) v += rows[ty.idx[oy * 4 + k] * S + ox] * ty.wts[oy * 4 + k];
+      const a = rows[y1 * S + ox], b = rows[y2 * S + ox];
+      v = Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
+      const t = Math.min(1, Math.max(0, (v - lo) / range));
+      let g = Math.round((255 * Math.asinh(STRETCH * t)) / STRETCH_NORM);
+      if (invert) g = 255 - g;
+      img.data[p] = img.data[p + 1] = img.data[p + 2] = g;
+      img.data[p + 3] = 255;
+    }
+  }
+  return img;
 }
 
 // ---------- player ----------
