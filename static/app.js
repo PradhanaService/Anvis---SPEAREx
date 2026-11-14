@@ -8,7 +8,6 @@
 // ======================================================================
 
 const MAX_FRAMES = 300;          // if more images exist, show this many spread evenly in time
-const PARALLEL = 6;              // simultaneous cutout requests
 const WIDTH_RATIO = 2.5;         // explore field: width = 2.5 x height
 const PREVIEW = { h: 630, w: 1800 };   // page-1 sky preview, arcsec (10.5' x 30')
 const DEFAULT_POS = { ra: 270.0, dec: 66.560708 };  // North Ecliptic Pole: a SPHEREx deep field
@@ -272,6 +271,27 @@ async function getJSON(url) {
 const framesURL = (ra, dec, band) => `api/frames?ra=${ra}&dec=${dec}&band=${encodeURIComponent(band)}`;
 const cutoutURL = (f, ra, dec, h, w) =>
   `api/cutout?ra=${ra}&dec=${dec}&size=${h}&width=${w}&url=${encodeURIComponent(f.url)}`;
+// POST a list of frames to /api/cutouts and call onLine for each streamed result line.
+async function streamCutouts(list, c, id, onLine) {
+  const r = await fetch(`api/cutouts?ra=${c.ra}&dec=${c.dec}&size=${ex.h}&width=${ex.w}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ urls: list.map((f) => f.url) }),
+  });
+  if (!r.ok || !r.body) throw new Error(r.statusText);
+  const reader = r.body.getReader(), dec = new TextDecoder();
+  let buf = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (id !== ex.searchId) { reader.cancel(); return; }   // a newer search started
+    if (done) break;
+    buf += dec.decode(value, { stream: true });
+    let k;
+    while ((k = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, k); buf = buf.slice(k + 1);
+      if (line) onLine(JSON.parse(line));
+    }
+  }
+}
 const shortDate = (d) => {   // "2025-05-10 17:04:37" -> { day: "10 May", year: "2025", time: "17:04" }
   const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})/.exec(d) || [];
   const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][(+m[2] || 1) - 1];
@@ -488,26 +508,23 @@ async function openExplore(c) {
   ex.frames = all.map((f) => ({ ...f, cut: null, failed: false }));
   buildStrip(); exMsg("Loading images…"); progress(); renderPlayback();
 
-  // Download cutouts in time order, a few at a time; give failed ones one more try at the end.
-  let queue = ex.frames.slice();
-  async function worker() {
-    while (queue.length && id === ex.searchId) {
-      const f = queue.shift();
-      try {
-        f.cut = await getJSON(cutoutURL(f, c.ra, c.dec, ex.h, ex.w));
-        if (f.failed) { f.failed = false; ex.failed--; }
-        ex.done++;
-      } catch {
-        if (!f.failed) { f.failed = true; ex.failed++; }
-      }
-      if (id !== ex.searchId) return;
-      progress(); updateChip(ex.frames.indexOf(f));
-      if (ex.frames[ex.current] === f) showFrame();
-    }
-  }
+  // Download all cutouts in one streamed request: the server fetches several from IRSA at
+  // once and sends each frame back as soon as it is ready. Failed frames get one more try.
+  const received = (f, frame) => {
+    if (frame) { f.cut = frame; if (f.failed) { f.failed = false; ex.failed--; } ex.done++; }
+    else if (!f.failed) { f.failed = true; ex.failed++; }
+    progress(); updateChip(ex.frames.indexOf(f));
+    if (ex.frames[ex.current] === f) showFrame();
+  };
   for (let pass = 0; pass < 2 && id === ex.searchId; pass++) {
-    if (pass === 1) queue = ex.frames.filter((f) => f.failed);
-    await Promise.all(Array.from({ length: PARALLEL }, worker));
+    const batch = pass === 0 ? ex.frames.slice() : ex.frames.filter((f) => f.failed);
+    if (!batch.length) break;
+    const got = new Set();
+    try {
+      await streamCutouts(batch, c, id, (msg) => { got.add(msg.i); received(batch[msg.i], msg.frame); });
+    } catch { /* connection lost: anything not received counts as failed below */ }
+    if (id !== ex.searchId) return;
+    batch.forEach((f, i) => { if (!got.has(i)) received(f, null); });
   }
   if (id !== ex.searchId) return;
   ex.finished = true; progress();

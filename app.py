@@ -12,9 +12,13 @@ The browser can't call IRSA directly (no CORS headers), so this server
 fetches for it and returns small JSON arrays.
 """
 
+import concurrent.futures as cf
 import csv
 import io
+import json
 import logging
+import os
+import re
 import threading
 import time
 import warnings
@@ -25,7 +29,7 @@ import requests
 from astropy.io import fits
 from astropy.time import Time
 from astropy.wcs import WCS
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, Response, jsonify, request, send_from_directory
 
 warnings.filterwarnings("ignore")
 logging.getLogger("astropy").setLevel(logging.ERROR)
@@ -41,7 +45,10 @@ MAX_WIDTH_ARCSEC = 1800   # field width for wide fields
 USER_AGENT = "anvis/1.0"
 
 # Be polite to IRSA: limit concurrent cutout downloads from this server.
-_irsa_slots = threading.Semaphore(6)
+_irsa_slots = threading.Semaphore(10)
+# Worker threads for /api/cutouts (each one waits on _irsa_slots before calling IRSA).
+_pool = cf.ThreadPoolExecutor(max_workers=10)
+MAX_BATCH = 400
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 session = requests.Session()
@@ -183,6 +190,13 @@ def read_first_hdus(chunks, n_hdus):
 
 _wave_tables = {}  # (detector, pipeline version) -> WCS-WAVE table HDU
 _wave_lock = threading.Lock()
+# WCS-WAVE tables are also saved here, so they survive a server restart.
+CACHE_DIR = os.environ.get("ANVIS_CACHE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache"))
+
+
+def _wave_path(key):
+    name = re.sub(r"[^A-Za-z0-9._-]", "_", f"wcswave_D{key[0]}_{key[1]}")
+    return os.path.join(CACHE_DIR, name + ".fits")
 
 
 def fetch_cutout(url, ra, dec, size_deg):
@@ -200,8 +214,19 @@ def fetch_cutout(url, ra, dec, size_deg):
     if key not in _wave_tables:
         with _wave_lock:
             if key not in _wave_tables:
-                whole = fits.HDUList.fromstring(irsa_get(full).content)
-                _wave_tables[key] = whole["WCS-WAVE"].copy()
+                path = _wave_path(key)
+                try:
+                    with fits.open(path) as saved:
+                        _wave_tables[key] = saved["WCS-WAVE"].copy()
+                except (OSError, KeyError):
+                    whole = fits.HDUList.fromstring(irsa_get(full).content)
+                    _wave_tables[key] = whole["WCS-WAVE"].copy()
+                    try:
+                        os.makedirs(CACHE_DIR, exist_ok=True)
+                        fits.HDUList([fits.PrimaryHDU(), _wave_tables[key].copy()]).writeto(path + ".tmp", overwrite=True)
+                        os.replace(path + ".tmp", path)
+                    except OSError:
+                        pass  # caching is optional
     hdul.append(_wave_tables[key])
     return hdul
 
@@ -285,6 +310,50 @@ def cutout():
     resp = jsonify(frame)
     resp.headers["Cache-Control"] = "public, max-age=86400"
     return resp
+
+
+@app.post("/api/cutouts")
+def cutouts():
+    """Many frames in one request, streamed back as each is ready (one JSON object per line).
+
+    Browsers open only ~6 connections per site, so one streamed request lets the server fetch
+    10 frames from IRSA at a time. Lines: {"i": <index>, "frame": {...}} or {"i": <index>, "error": "..."}.
+    """
+    try:
+        ra, dec = parse_position()
+        size = float(request.args.get("size", 180))
+        width = float(request.args.get("width", size))
+    except ValueError as e:
+        return bad(str(e))
+    if not 30 <= size <= MAX_SIZE_ARCSEC:
+        return bad(f"size must be between 30 and {MAX_SIZE_ARCSEC} arcsec")
+    if not 30 <= width <= MAX_WIDTH_ARCSEC:
+        return bad(f"width must be between 30 and {MAX_WIDTH_ARCSEC} arcsec")
+    urls = (request.get_json(silent=True) or {}).get("urls")
+    if not isinstance(urls, list) or not 1 <= len(urls) <= MAX_BATCH:
+        return bad(f"body must be {{\"urls\": [...]}} with 1 to {MAX_BATCH} URLs")
+    for url in urls:
+        if not isinstance(url, str) or not url.startswith(DATA_PREFIX) or not url.endswith(".fits") or "?" in url:
+            return bad("every url must be an IRSA SPHEREx image URL")
+    args = (round(ra, 6), round(dec, 6), round(size), round(width))
+
+    def generate():
+        # Submitted in list order (time order), so early frames tend to arrive first.
+        futures = {_pool.submit(make_frame, url, *args): i for i, url in enumerate(urls)}
+        try:
+            for fut in cf.as_completed(futures):
+                i = futures[fut]
+                try:
+                    line = {"i": i, "frame": fut.result()}
+                except Exception as e:
+                    app.logger.warning("cutout failed for %s: %s", urls[i], e)
+                    line = {"i": i, "error": str(e)}
+                yield json.dumps(line) + "\n"
+        finally:  # the browser went away (new search, closed tab): drop work not yet started
+            for fut in futures:
+                fut.cancel()
+
+    return Response(generate(), mimetype="application/x-ndjson")
 
 
 if __name__ == "__main__":
