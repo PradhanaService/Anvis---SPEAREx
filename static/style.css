@@ -1,0 +1,38 @@
+* { box-sizing: border-box; }
+body {
+  margin: 0 auto; padding: 16px; max-width: 900px;
+  font: 15px/1.45 system-ui, sans-serif; color: #1d2433; background: #f6f7f9;
+}
+h1 { margin: 0 0 4px; font-size: 22px; }
+header p { margin: 0 0 16px; color: #555; }
+a { color: #1f5fbf; }
+
+form, .controls {
+  display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end;
+  padding: 12px; background: #fff; border: 1px solid #d8dce3; border-radius: 6px;
+}
+label { display: flex; flex-direction: column; font-size: 13px; color: #444; gap: 3px; }
+label:has(input[type=checkbox]) { flex-direction: row; align-items: center; }
+input, select, button { font: inherit; padding: 5px 8px; border: 1px solid #b9c0cc; border-radius: 4px; }
+#ra, #dec { width: 170px; }
+#size, #speed, #minb, #maxb { width: 100px; }
+button { background: #1f5fbf; color: #fff; border-color: #1f5fbf; cursor: pointer; }
+button:disabled { opacity: .5; cursor: default; }
+.controls button { background: #fff; color: #1d2433; border-color: #b9c0cc; min-width: 78px; }
+
+#status { min-height: 1.4em; margin: 10px 0; }
+#status.error { color: #b00020; }
+
+.stage { display: flex; flex-direction: column; align-items: center; margin-bottom: 12px; }
+canvas {
+  width: 512px; max-width: 100%; height: auto; aspect-ratio: 1;
+  image-rendering: pixelated; background: #888; border: 1px solid #999;
+}
+#info { margin-top: 6px; font: 13px/1.4 ui-monospace, monospace; text-align: center; }
+
+.controls { flex-direction: column; align-items: stretch; }
+.controls .row { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: end; }
+#slider { flex: 1; min-width: 160px; padding: 0; border: 0; align-self: center; }
+
+.note { font-size: 13px; color: #555; }
+footer { margin-top: 24px; font-size: 13px; color: #555; border-top: 1px solid #d8dce3; padding-top: 10px; }
