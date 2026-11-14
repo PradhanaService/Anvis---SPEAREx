@@ -1,7 +1,7 @@
 "use strict";
 
 const MAX_FRAMES = 300;   // if more images exist, show this many spread evenly in time
-const PARALLEL = 4;       // simultaneous cutout requests
+const PARALLEL = 6;       // simultaneous cutout requests
 
 const $ = (id) => document.getElementById(id);
 const canvas = $("canvas");

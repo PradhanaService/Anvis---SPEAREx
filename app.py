@@ -40,7 +40,7 @@ MAX_SIZE_ARCSEC = 600
 USER_AGENT = "anvis/1.0"
 
 # Be polite to IRSA: limit concurrent cutout downloads from this server.
-_irsa_slots = threading.Semaphore(4)
+_irsa_slots = threading.Semaphore(6)
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 session = requests.Session()
@@ -67,6 +67,15 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
+@lru_cache(maxsize=512)
+def sia_rows(ra, dec):
+    """All SPHEREx images (every band) covering a position, from IRSA's SIA service. Cached."""
+    params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "20000")]
+    params += [("COLLECTION", c) for c in COLLECTIONS]
+    text = irsa_get(SIA_URL, params=params, timeout=120).text
+    return tuple(csv.DictReader(io.StringIO(text)))
+
+
 @app.get("/api/frames")
 def frames():
     """List all SPHEREx spectral images covering (ra, dec) in one band, oldest first."""
@@ -78,15 +87,13 @@ def frames():
     if band not in BANDS:
         return bad("band must be one of " + ", ".join(BANDS))
 
-    params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "20000")]
-    params += [("COLLECTION", c) for c in COLLECTIONS]
     try:
-        text = irsa_get(SIA_URL, params=params, timeout=120).text
+        rows = sia_rows(round(ra, 6), round(dec, 6))
     except Exception as e:
         return bad(f"IRSA SIA query failed: {e}", 502)
 
     out, seen = [], set()
-    for row in csv.DictReader(io.StringIO(text)):
+    for row in rows:
         if row.get("energy_bandpassname") != band or row.get("dataproduct_subtype") != "science":
             continue
         if not row["access_url"].startswith(DATA_PREFIX) or row["obs_id"] in seen:
@@ -104,28 +111,98 @@ def frames():
     return jsonify({"ra": ra, "dec": dec, "band": band, "frames": out})
 
 
-def irsa_get(url, params=None, timeout=180, tries=7):
-    """GET from IRSA, retrying when it is busy or briefly unavailable (429/5xx)."""
-    delay = 2.0
+def irsa_get(url, params=None, timeout=180, tries=12, n_hdus=None):
+    """GET from IRSA, retrying when it is busy or briefly unavailable (429/5xx).
+
+    With n_hdus, read only the first n_hdus FITS HDUs of the response and return their bytes.
+    """
+    delay = 0.5
     for attempt in range(tries):
         try:
             with _irsa_slots:
-                r = session.get(url, params=params, timeout=timeout)
+                r = session.get(url, params=params, timeout=timeout, stream=n_hdus is not None)
+                if r.status_code == 200:
+                    if n_hdus is None:
+                        return r
+                    try:
+                        return read_first_hdus(r.iter_content(65536), n_hdus)
+                    finally:
+                        r.close()
         except (requests.ConnectionError, requests.Timeout):
             r = None
-        if r is not None and r.status_code == 200:
-            return r
         if r is not None and r.status_code not in (429, 500, 502, 503, 504):
             raise RuntimeError(f"IRSA error {r.status_code}: {r.text[:200]}")
         if attempt < tries - 1:
             time.sleep(delay)
-            delay *= 1.6
+            delay = min(delay * 1.5, 5.0)
     raise RuntimeError("IRSA is busy or unavailable; please try again later")
 
 
+def read_first_hdus(chunks, n_hdus):
+    """Read a streamed FITS file only up to the end of its first n_hdus HDUs.
+
+    SPHEREx cutouts are ~4 MB, almost all of it the EPSF table (HDU 5) which this app
+    doesn't use; IMAGE..ZODI (HDUs 1-4) are only a few kB, so we stop early.
+    """
+    buf, pos = bytearray(), 0
+    chunks = iter(chunks)
+
+    def need(n):
+        while len(buf) < n:
+            chunk = next(chunks, None)
+            if chunk is None:
+                raise RuntimeError("IRSA cutout ended early")
+            buf.extend(chunk)
+
+    for _ in range(n_hdus):
+        cards, end = {}, False
+        while not end:  # header: 2880-byte blocks of 80-char cards, ending with END
+            need(pos + 2880)
+            block = bytes(buf[pos:pos + 2880]).decode("ascii", "replace")
+            pos += 2880
+            for i in range(0, 2880, 80):
+                card = block[i:i + 80]
+                key = card[:8].strip()
+                if key == "END":
+                    end = True
+                    break
+                if card[8:10] == "= ":
+                    cards[key] = card[10:].split("/")[0].strip()
+        naxis = int(cards.get("NAXIS", 0))
+        size = 0
+        if naxis:
+            size = 1
+            for i in range(1, naxis + 1):
+                size *= int(cards[f"NAXIS{i}"])
+        size = abs(int(cards["BITPIX"])) // 8 * int(cards.get("GCOUNT", 1)) * (int(cards.get("PCOUNT", 0)) + size)
+        pos += -(-size // 2880) * 2880  # data, padded to a whole block
+    need(pos)
+    return bytes(buf[:pos])
+
+
+_wave_tables = {}  # (detector, pipeline version) -> WCS-WAVE table HDU
+_wave_lock = threading.Lock()
+
+
 def fetch_cutout(url, ra, dec, size_deg):
-    """Download one cutout via IRSA's cutout service (tutorial: ?center=<ra>,<dec>d&size=<deg>)."""
-    return irsa_get(f"{url}?center={ra},{dec}d&size={size_deg}").content
+    """Get one cutout via IRSA's cutout service (tutorial: ?center=<ra>,<dec>d&size=<deg>).
+
+    Returns an HDUList with PRIMARY, IMAGE, FLAGS, VARIANCE, ZODI and WCS-WAVE.
+    WCS-WAVE (the wavelength lookup table) is identical for every image from the same
+    detector and pipeline version, so it is downloaded once and reused.
+    """
+    full = f"{url}?center={ra},{dec}d&size={size_deg}"
+    hdul = fits.HDUList.fromstring(irsa_get(full, n_hdus=5))
+    if [h.name for h in hdul] != ["PRIMARY", "IMAGE", "FLAGS", "VARIANCE", "ZODI"]:
+        return fits.HDUList.fromstring(irsa_get(full).content)  # unexpected layout: take it all
+    key = (hdul["IMAGE"].header.get("DETECTOR"), hdul[0].header.get("VERSION"))
+    if key not in _wave_tables:
+        with _wave_lock:
+            if key not in _wave_tables:
+                whole = fits.HDUList.fromstring(irsa_get(full).content)
+                _wave_tables[key] = whole["WCS-WAVE"].copy()
+    hdul.append(_wave_tables[key])
+    return hdul
 
 
 def bilinear(img, x, y):
@@ -145,8 +222,7 @@ def bilinear(img, x, y):
 def make_frame(url, ra, dec, size_arcsec):
     size_deg = size_arcsec / 3600.0
     # Request a slightly larger cutout so the rotated detector grid covers our square.
-    raw = fetch_cutout(url, ra, dec, round(size_deg * 1.5, 5))
-    with fits.open(io.BytesIO(raw)) as hdul:
+    with fetch_cutout(url, ra, dec, round(size_deg * 1.5, 5)) as hdul:
         header = hdul["IMAGE"].header
         # Zodiacal-light-subtracted surface brightness, as in the tutorial notebooks.
         image = hdul["IMAGE"].data.astype(float) - hdul["ZODI"].data.astype(float)
