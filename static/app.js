@@ -409,6 +409,34 @@ $("search").addEventListener("submit", (e) => {
   openExplore(c);
 });
 
+// Preset targets. Coordinates are ICRS, in degrees.
+// Source: SIMBAD (basic table), queried 2026-11-14 via its official mirror
+// simbad.cfa.harvard.edu, because simbad.cds.unistra.fr was unavailable.
+// WISE 0855 uses the coordinates given in the project brief.
+// Barnard's Star and Epsilon Indi B move fast, so their J2000 positions were moved to epoch
+// 2026.0 using SIMBAD's proper motion, parallax and radial velocity (none listed for eps Ind B;
+// 0 used). RW Aur and R Dra are SIMBAD J2000 positions (slow movers).
+const PRESETS = [
+  { name: "WISE 0855",      ra: 133.795129, dec: -7.245147 },
+  { name: "Barnard's Star", ra: 269.446259, dec: 4.768324 },   // SIMBAD "NAME Barnard's star"; J2000 269.452077, +4.693365
+  { name: "Epsilon Indi B", ra: 331.096669, dec: -56.800649 }, // SIMBAD "* eps Ind B"; J2000 331.044147, -56.782844
+  { name: "RW Aurigae",     ra: 76.956526,  dec: 30.401438 },  // SIMBAD "V* RW Aur"
+  { name: "R Draconis",     ra: 248.167611, dec: 66.754979 },  // SIMBAD "V* R Dra"
+];
+PRESETS.forEach((t) => {
+  const b = document.createElement("button");
+  b.type = "button"; b.className = "tb reset"; b.textContent = t.name;
+  b.addEventListener("click", () => {
+    $("ra").value = t.ra.toFixed(6);
+    $("dec").value = (t.dec >= 0 ? "+" : "") + t.dec.toFixed(6);
+    $("size").value = 600; $("band").value = "SPHEREx-D3";
+    $("size").dispatchEvent(new Event("input"));   // refresh the size hint
+    updateHints();
+    $("search").requestSubmit();                    // same path as clicking Search
+  });
+  $("presets").appendChild(b);
+});
+
 // ======================================================================
 // Page 2 – explore observations
 // ======================================================================
