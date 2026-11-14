@@ -19,9 +19,16 @@ All data comes from the NASA/IPAC Infrared Science Archive
 so a small Python backend (`app.py`) does the IRSA requests; the page itself is plain
 HTML/CSS/JS in `static/`.
 
-Player controls (modelled on WiseView): Prev / Play / Next, frame slider, speed (ms per frame),
-min/max brightness (percentiles), invert, zoom, ←/→/space keys, and a shareable URL
-(`#ra=...&dec=...&size=...&band=...`).
+The app has two pages:
+
+1. **Select coordinates** – a real SPHEREx image (30′ × 10.5′) you can pan, zoom and hover to
+   read coordinates; click to pick a position, or type RA/Dec (degrees or sexagesimal).
+   Choose the band (D1–D6) and field height, then Search.
+2. **Explore observations** – every SPHEREx image of that field in time order, with a frame
+   strip, Prev / Pause / Play / Next, speed chips (0.25x–3x), brightness/invert controls,
+   zoom and pan, ←/→/space keys, and a shareable URL (`#ra=...&dec=...&size=...&band=...`).
+   Click the image to read the position, measured surface brightness (MJy/sr) and wavelength
+   in each frame; every frame links to its original FITS file at IRSA.
 
 Note: SPHEREx's wavelength varies across its detectors, so each frame samples a slightly
 different wavelength within the band. The wavelength is shown with each frame.

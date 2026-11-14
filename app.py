@@ -36,7 +36,8 @@ DATA_PREFIX = IRSA + "/ibe/data/spherex/"
 COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 + QR3 (QR2 is superseded)
 BANDS = [f"SPHEREx-D{i}" for i in range(1, 7)]
 PIXEL_SCALE = 6.15 / 3600.0  # deg/pixel, native SPHEREx scale
-MAX_SIZE_ARCSEC = 600
+MAX_SIZE_ARCSEC = 640     # field height (and width, for square fields)
+MAX_WIDTH_ARCSEC = 1800   # field width for wide fields
 USER_AGENT = "anvis/1.0"
 
 # Be polite to IRSA: limit concurrent cutout downloads from this server.
@@ -219,10 +220,14 @@ def bilinear(img, x, y):
 
 
 @lru_cache(maxsize=4000)
-def make_frame(url, ra, dec, size_arcsec):
-    size_deg = size_arcsec / 3600.0
-    # Request a slightly larger cutout so the rotated detector grid covers our square.
-    with fetch_cutout(url, ra, dec, round(size_deg * 1.5, 5)) as hdul:
+def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
+    """One frame: height size_arcsec, width width_arcsec (default: square)."""
+    width_arcsec = width_arcsec or size_arcsec
+    size_deg, width_deg = size_arcsec / 3600.0, width_arcsec / 3600.0
+    # SPHEREx's detector is rotated differently on every visit, so request a square cutout
+    # that covers the field's diagonal at any rotation.
+    cover = (np.hypot(size_arcsec, width_arcsec) + 30) / 3600.0
+    with fetch_cutout(url, ra, dec, round(cover, 5)) as hdul:
         header = hdul["IMAGE"].header
         # Zodiacal-light-subtracted surface brightness, as in the tutorial notebooks.
         image = hdul["IMAGE"].data.astype(float) - hdul["ZODI"].data.astype(float)
@@ -239,19 +244,21 @@ def make_frame(url, ra, dec, size_arcsec):
         version = hdul[0].header.get("VERSION", "")
 
     # Resample onto a common north-up, east-left grid so every frame lines up.
-    n = max(8, int(round(size_deg / PIXEL_SCALE)))
+    ny = max(8, int(round(size_deg / PIXEL_SCALE)))
+    nx = max(8, int(round(width_deg / PIXEL_SCALE)))
     grid = WCS(naxis=2)
     grid.wcs.ctype = ["RA---TAN", "DEC--TAN"]
     grid.wcs.crval = [ra, dec]
-    grid.wcs.crpix = [(n + 1) / 2, (n + 1) / 2]
+    grid.wcs.crpix = [(nx + 1) / 2, (ny + 1) / 2]
     grid.wcs.cdelt = [-PIXEL_SCALE, PIXEL_SCALE]
-    gy, gx = np.mgrid[0:n, 0:n]
+    gy, gx = np.mgrid[0:ny, 0:nx]
     wra, wdec = grid.pixel_to_world_values(gx.ravel(), gy.ravel())
     sx, sy = sky.world_to_pixel_values(wra, wdec)
-    out = bilinear(image, sx, sy).reshape(n, n)[::-1]  # row 0 = north (top of screen)
+    out = bilinear(image, sx, sy).reshape(ny, nx)[::-1]  # row 0 = north (top of screen)
 
     data = [None if not np.isfinite(v) else round(float(v), 4) for v in out.ravel()]
-    return {"width": n, "height": n, "data": data, "wavelength_um": wavelength,
+    return {"width": nx, "height": ny, "pixel_scale_arcsec": PIXEL_SCALE * 3600,
+            "data": data, "wavelength_um": wavelength,
             "mjd_avg": mjd, "pipeline_version": version, "unit": "MJy/sr"}
 
 
@@ -260,6 +267,7 @@ def cutout():
     try:
         ra, dec = parse_position()
         size = float(request.args.get("size", 180))
+        width = float(request.args.get("width", size))
     except ValueError as e:
         return bad(str(e))
     url = request.args.get("url", "")
@@ -267,8 +275,10 @@ def cutout():
         return bad("url must be an IRSA SPHEREx image URL")
     if not 30 <= size <= MAX_SIZE_ARCSEC:
         return bad(f"size must be between 30 and {MAX_SIZE_ARCSEC} arcsec")
+    if not 30 <= width <= MAX_WIDTH_ARCSEC:
+        return bad(f"width must be between 30 and {MAX_WIDTH_ARCSEC} arcsec")
     try:
-        frame = make_frame(url, round(ra, 6), round(dec, 6), round(size))
+        frame = make_frame(url, round(ra, 6), round(dec, 6), round(size), round(width))
     except Exception as e:
         app.logger.warning("cutout failed for %s: %s", url, e)
         return bad(str(e), 502)
