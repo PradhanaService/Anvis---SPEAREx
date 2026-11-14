@@ -1,4 +1,4 @@
-"""SPHEREx Time Viewer: a small Flask backend.
+"""Anvis (SPHEREx time viewer): a small Flask backend.
 
 All SPHEREx data comes from NASA/IPAC IRSA:
   * Frame list: IRSA Simple Image Access (SIA) service, collections
@@ -37,7 +37,7 @@ COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 + QR3 (QR2 is superseded)
 BANDS = [f"SPHEREx-D{i}" for i in range(1, 7)]
 PIXEL_SCALE = 6.15 / 3600.0  # deg/pixel, native SPHEREx scale
 MAX_SIZE_ARCSEC = 600
-USER_AGENT = "spherex-time-viewer/1.0"
+USER_AGENT = "anvis/1.0"
 
 # Be polite to IRSA: limit concurrent cutout downloads from this server.
 _irsa_slots = threading.Semaphore(4)

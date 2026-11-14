@@ -1,4 +1,6 @@
-# SPHEREx Time Viewer
+# Anvis
+
+*A SPHEREx time viewer.*
 
 A small public web tool: enter a sky position (RA, Dec) and see every SPHEREx image of
 that patch of sky, in time order, in a WiseView-style flip-book player.
@@ -43,6 +45,6 @@ Google Cloud Run, a VPS, …):
 
 * Python hosts: they pick up `requirements.txt` and the `Procfile`
   (`gunicorn app:app ...`).
-* Docker hosts: `docker build -t spherex-viewer . && docker run -p 8000:8000 spherex-viewer`.
+* Docker hosts: `docker build -t anvis . && docker run -p 8000:8000 anvis`.
 
 Use one worker process (as in the Procfile) so the in-memory cutout cache is shared.
