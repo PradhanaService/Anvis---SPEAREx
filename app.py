@@ -40,7 +40,7 @@ DATA_PREFIX = IRSA + "/ibe/data/spherex/"
 COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 + QR3 (QR2 is superseded)
 BANDS = [f"SPHEREx-D{i}" for i in range(1, 7)]
 PIXEL_SCALE = 6.15 / 3600.0  # deg/pixel, native SPHEREx scale
-MAX_SIZE_ARCSEC = 640     # field height (and width, for square fields)
+MAX_SIZE_ARCSEC = 1800    # field height (and width, for square fields)
 MAX_WIDTH_ARCSEC = 1800   # field width for wide fields
 USER_AGENT = "anvis/1.0"
 
@@ -244,6 +244,28 @@ def bilinear(img, x, y):
     return np.where(ok, v, np.nan)
 
 
+# SPHEREx FLAGS planes that are informational rather than a data-quality problem.
+INFO_FLAGS = {"FULLSAMPLE", "SOURCE"}
+
+
+def target_flags(flags_hdu, xc, yc):
+    """Quality flags set within 1 pixel of the target, named from the FLAGS header (MSKNnnnn)."""
+    h, data = flags_hdu.header, flags_hdu.data
+    xi, yi = int(round(float(xc))), int(round(float(yc)))
+    if data is None or not (0 <= xi < data.shape[1] and 0 <= yi < data.shape[0]):
+        return []
+    box = data[max(0, yi - 1):yi + 2, max(0, xi - 1):xi + 2]
+    bits = int(np.bitwise_or.reduce(box.ravel())) if box.size else 0
+    out = []
+    for key in h:
+        if key.startswith("MSKN"):
+            n = key[4:]
+            mask, name = h.get("MSKM" + n), str(h[key])
+            if mask and bits & int(mask) and name not in INFO_FLAGS:
+                out.append({"name": name, "desc": str(h.get("MSKD" + n, ""))})
+    return out
+
+
 @lru_cache(maxsize=4000)
 def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
     """One frame: height size_arcsec, width width_arcsec (default: square)."""
@@ -267,6 +289,7 @@ def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
             wavelength = None
         mjd = header.get("MJD-AVG") or header.get("MJD-OBS")
         version = hdul[0].header.get("VERSION", "")
+        quality = target_flags(hdul["FLAGS"], xc, yc)
 
     # Resample onto a common north-up, east-left grid so every frame lines up.
     ny = max(8, int(round(size_deg / PIXEL_SCALE)))
@@ -283,7 +306,7 @@ def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
 
     data = [None if not np.isfinite(v) else round(float(v), 4) for v in out.ravel()]
     return {"width": nx, "height": ny, "pixel_scale_arcsec": PIXEL_SCALE * 3600,
-            "data": data, "wavelength_um": wavelength,
+            "data": data, "wavelength_um": wavelength, "quality": quality,
             "mjd_avg": mjd, "pipeline_version": version, "unit": "MJy/sr"}
 
 

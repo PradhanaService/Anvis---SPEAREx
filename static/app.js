@@ -1,18 +1,18 @@
 "use strict";
 
 // ======================================================================
-// Anvis – SPHEREx time viewer (frontend).
-// Page 1: pick a position on a real SPHEREx image (or type it).
-// Page 2: flip through every SPHEREx image of that position in time order.
-// All pixels come from IRSA through this app's backend (/api/frames, /api/cutout).
+// Anvis – SPHEREx Sky Explorer (frontend).
+// 01 PICK: pick a position on a real SPHEREx image (or type it, or use a preset).
+// 02 EXPLORE: every SPHEREx image of that position in time order, with blink and difference.
+// All pixels come from IRSA through this app's backend (/api/frames, /api/cutout, /api/cutouts).
 // ======================================================================
 
 const MAX_FRAMES = 300;          // if more images exist, show this many spread evenly in time
-const WIDTH_RATIO = 2.5;         // explore field: width = 2.5 x height
-const PREVIEW = { h: 630, w: 1800 };   // page-1 sky preview, arcsec (10.5' x 30')
-const DEFAULT_POS = { ra: 270.0, dec: 66.560708 };  // North Ecliptic Pole: a SPHEREx deep field
+const MAX_WIDTH = 1800;           // arcsec: widest field the backend serves (30')
+const PREVIEW_W = 1800;          // 01 PICK preview width, arcsec (30'); height follows the viewer's shape
 const BASE_FRAME_MS = 500;       // 1.0x playback speed
-const SPEEDS = [0.25, 0.5, 1, 1.5, 2, 3];
+const BLINK_MS = 450;
+const DISPLAY = { minb: 1, maxb: 99.5, invert: false };   // brightness limits (percentiles of each frame)
 const BANDS = {
   "SPHEREx-D1": "0.75–1.09 µm", "SPHEREx-D2": "1.10–1.62 µm", "SPHEREx-D3": "1.63–2.41 µm",
   "SPHEREx-D4": "2.42–3.82 µm", "SPHEREx-D5": "3.83–4.41 µm", "SPHEREx-D6": "4.42–5.00 µm",
@@ -89,7 +89,7 @@ function cubicTaps(n, S) {
 }
 
 // Upsample a w x h frame to OW x OH (bicubic, clamped so stars get no halos) with the stretch applied.
-function drawFrame(w, h, data, lo, hi, invert, OW, OH) {
+function drawFrame(w, h, data, lo, hi, invert, OW, OH, linear) {
   // No-data pixels borrow their nearest valid neighbour for interpolation only; they are still
   // drawn as "no data" below.
   const vals = new Float32Array(w * h), valid = new Uint8Array(w * h);
@@ -125,7 +125,7 @@ function drawFrame(w, h, data, lo, hi, invert, OW, OH) {
       const a = rows[y1 * OW + ox], b = rows[y2 * OW + ox];
       v = Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
       const t = Math.min(1, Math.max(0, (v - lo) / range));
-      let g = Math.round((255 * Math.asinh(STRETCH * t)) / STRETCH_NORM);
+      let g = Math.round(linear ? 255 * t : (255 * Math.asinh(STRETCH * t)) / STRETCH_NORM);
       if (invert) g = 255 - g;
       img.data[p] = img.data[p + 1] = img.data[p + 2] = g; img.data[p + 3] = 255;
     }
@@ -209,9 +209,12 @@ class SkyView {
     const newGeom = !this.field || this.field.nx !== cut.width || this.field.ny !== cut.height;
     this.field = { nx: cut.width, ny: cut.height, scale: cut.pixel_scale_arcsec || 6.15, ra, dec };
     if (newGeom) { this.z = 1; this.tx = 0; this.ty = 0; }
-    const finite = cut.data.filter((v) => v !== null).sort((a, b) => a - b);
-    const lo = percentile(finite, display.minb);
-    let hi = percentile(finite, display.maxb); if (hi <= lo) hi = lo + 1e-6;
+    let lo = display.lo, hi = display.hi;
+    if (lo === undefined) {
+      const finite = cut.data.filter((v) => v !== null).sort((a, b) => a - b);
+      lo = percentile(finite, display.minb); hi = percentile(finite, display.maxb);
+    }
+    if (hi <= lo) hi = lo + 1e-6;
     // Render at about the box's device resolution (capped for speed); zoom scales this picture.
     const r = this.rect(), dpr = Math.min(2, window.devicePixelRatio || 1);
     let f = Math.max(1, Math.min(r.width * dpr / cut.width, r.height * dpr / cut.height) || 1);
@@ -219,7 +222,7 @@ class SkyView {
     const OW = Math.max(cut.width, Math.round(cut.width * f)), OH = Math.max(cut.height, Math.round(cut.height * f));
     if (!this.off) this.off = document.createElement("canvas");
     this.off.width = OW; this.off.height = OH;
-    this.off.getContext("2d").putImageData(drawFrame(cut.width, cut.height, cut.data, lo, hi, display.invert, OW, OH), 0, 0);
+    this.off.getContext("2d").putImageData(drawFrame(cut.width, cut.height, cut.data, lo, hi, display.invert, OW, OH, display.linear), 0, 0);
     this.hasImage = true;
     this.fitClamp(); this.draw();
   }
@@ -237,7 +240,8 @@ class SkyView {
       c.imageSmoothingEnabled = true; c.imageSmoothingQuality = "high";
       c.drawImage(this.off, this.tx, this.ty, this.field.nx * k, this.field.ny * k);
     }
-    this.zoomScope.querySelector(".zpct").textContent = Math.round(this.z * 100) + "%";
+    const zp = this.zoomScope.querySelector(".zpct");
+    if (zp) zp.textContent = Math.round(this.z * 100) + "%";
     this.drawScale();
     this.onChange && this.onChange();
   }
@@ -299,44 +303,96 @@ const shortDate = (d) => {   // "2025-05-10 17:04:37" -> { day: "10 May", year: 
 };
 
 // ======================================================================
-// Page 1 – select coordinates
+// Presets
 // ======================================================================
-const sel = {
-  center: { ...DEFAULT_POS },   // preview centre
-  pick: null,                   // selected { ra, dec }
-  loadId: 0,
-};
+// Preset targets. Coordinates are ICRS, in degrees.
+// Source: SIMBAD (basic table), queried 2026-11-14 via its official mirror
+// simbad.cfa.harvard.edu, because simbad.cds.unistra.fr was unavailable.
+// WISE 0855 uses the coordinates given in the project brief.
+// Barnard's Star and Epsilon Indi B move fast, so their J2000 positions were moved to epoch
+// 2026.0 using SIMBAD's proper motion, parallax and radial velocity (none listed for eps Ind B;
+// 0 used). RW Aur and R Dra are SIMBAD J2000 positions (slow movers).
+const PRESETS = [
+  { name: "WISE 0855",      kind: "Y dwarf",            ra: 133.795129, dec: -7.245147 },
+  { name: "Barnard's Star", kind: "Red dwarf",          ra: 269.446259, dec: 4.768324 },   // SIMBAD "NAME Barnard's star"; J2000 269.452077, +4.693365
+  { name: "Epsilon Indi B", kind: "Brown dwarf binary", ra: 331.096669, dec: -56.800649 }, // SIMBAD "* eps Ind B"; J2000 331.044147, -56.782844
+  { name: "RW Aurigae",     kind: "T Tauri star",       ra: 76.956526,  dec: 30.401438 },  // SIMBAD "V* RW Aur"
+  { name: "R Draconis",     kind: "Mira variable",      ra: 248.167611, dec: 66.754979 },  // SIMBAD "V* R Dra"
+];
+const PRESET_SIZE_ARCMIN = 10, PRESET_BAND = "SPHEREx-D3";
+const START_PRESET = "Barnard's Star";   // shown on 01 PICK when the page opens
+
+const bandShort = (b) => b.slice(-2);
+const sameSky = (a, b) => a && b && Math.abs(a.ra - b.ra) < 1e-5 && Math.abs(a.dec - b.dec) < 1e-5;
+const presetAt = (c) => PRESETS.find((p) => sameSky(p, c));
+
+// Field height (arcsec) from the HEIGHT box (arcmin, 1–10).
+function heightArcsec() {
+  const m = Number($("size").value);
+  return m >= 1 && m <= 10 ? Math.round(m * 60) : null;
+}
+// Explore field width: the explore viewer's shape (pixels stay square), within backend limits.
+function exploreWidth(h) {
+  const narrow = window.innerWidth <= 760;
+  const vw = Math.max(200, window.innerWidth - 22);
+  const vh = narrow ? window.innerHeight * 0.56 : Math.max(160, Math.max(window.innerHeight, 480) - 172);
+  return Math.round(Math.min(MAX_WIDTH, Math.max(h, h * vw / vh)));
+}
+
+// ======================================================================
+// 01 PICK
+// ======================================================================
+const pk = { center: null, pick: null, band: "", loadId: 0, shownFrame: null };
 const pvBox = $("pvSky");
-const pvView = new SkyView(pvBox, $("select"), {
+const pvView = new SkyView(pvBox, $("pvZoom"), {
   onHover: (h) => pvHover(h),
-  onPick: (q) => { const c = pixToSky(pvView.field, q.ix, q.iy); setPick(c, true); },
-  onChange: () => placePick(),
+  onPick: (q) => setPick(pixToSky(pvView.field, q.ix, q.iy), true),
+  onChange: () => placePickMarks(),
 });
 
+function pvLoading(text, spinner = true) {
+  $("pvLoading").hidden = !text;
+  if (text) $("pvLoadingText").textContent = text;
+  pvBox.querySelector(".spin").hidden = !spinner;
+}
+
 async function loadPreview(center) {
-  const id = ++sel.loadId, band = $("band").value;
-  sel.center = { ...center }; sel.band = band;
-  $("pvTitle").textContent = "Sky preview";
-  $("pvSub").textContent = `Centre RA ${fmtRA(center.ra)} · Dec ${fmtDec(center.dec)} · 6.15″ per pixel · North up, East left`;
-  $("pvMsg").hidden = false; $("pvMsg").textContent = "Loading a SPHEREx image from IRSA…";
-  $("pvCredit").textContent = "";
+  const id = ++pk.loadId, band = $("band").value;
+  pk.center = { ...center }; pk.band = band;
+  const r = pvView.rect();
+  const w = PREVIEW_W, h = Math.round(Math.min(1800, Math.max(300, w * (r.height / Math.max(1, r.width)))));
+  pvLoading("Loading SPHEREx image…");
+  $("pvCredit").textContent = "SPHEREx image from IRSA";
+  updatePickLabel();
   try {
     const list = await getJSON(framesURL(center.ra, center.dec, band));
-    if (id !== sel.loadId) return;
-    if (!list.frames.length) throw new Error(`No SPHEREx ${band.slice(-2)} image covers this position yet.`);
+    if (id !== pk.loadId) return;
+    if (!list.frames.length) throw new Error(`no SPHEREx ${bandShort(band)} image covers this position yet`);
     const f = list.frames[list.frames.length - 1];      // the most recent image
-    const cut = await getJSON(cutoutURL(f, center.ra, center.dec, PREVIEW.h, PREVIEW.w));
-    if (id !== sel.loadId) return;
-    pvView.setImage(cut, center.ra, center.dec, { minb: 1, maxb: 99.5, invert: false });
-    $("pvMsg").hidden = true;
-    $("pvCredit").innerHTML = `SPHEREx ${esc(band.slice(-2))} · ${esc(f.obs_id)} · ${esc(f.date.slice(0, 10))} · ` +
-      `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">original file at IRSA</a>`;
-    placePick(); refreshSelInfo();
+    const cut = await getJSON(cutoutURL(f, center.ra, center.dec, h, w));
+    if (id !== pk.loadId) return;
+    pvView.setImage(cut, center.ra, center.dec, DISPLAY);
+    pk.shownFrame = f;
+    pvLoading("");
+    $("pvCredit").innerHTML = `SPHEREx ${esc(bandShort(band))} · ${esc(f.date.slice(0, 10))} · ` +
+      `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">image file at IRSA</a>`;
+    placePickMarks();
   } catch (e) {
-    if (id !== sel.loadId) return;
+    if (id !== pk.loadId) return;
     pvView.clearImage();
-    $("pvMsg").hidden = false; $("pvMsg").textContent = "Could not load a preview image: " + e.message;
+    pvLoading("Could not load a SPHEREx image here: " + e.message, false);
   }
+}
+
+function updatePickLabel() {
+  const p = presetAt(pk.pick);
+  $("pvName").textContent = p ? p.name : "Custom field";
+  $("pvSubl").textContent = `${bandShort($("band").value)} · ${BANDS[$("band").value]} · 6.15″/px`;
+  $("presets").querySelectorAll(".pr").forEach((b) => {
+    const on = !!p && b.dataset.name === p.name;
+    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
+  });
+  $("bandHint").textContent = `Detector ${bandShort($("band").value).slice(1)} · ${BANDS[$("band").value]}`;
 }
 
 function pvHover(h) {
@@ -348,51 +404,48 @@ function pvHover(h) {
   const r = pvView.rect(), c = pixToSky(pvView.field, h.ix, h.iy);
   pvBox.querySelector(".cross-h").style.top = h.y + "px";
   pvBox.querySelector(".cross-v").style.left = h.x + "px";
-  tag.innerHTML = `<b>N</b>  Dec ${esc(fmtDec(c.dec))}  ${esc(degDec(c.dec))}\n<b>E</b>  RA  ${esc(fmtRA(c.ra))}  ${esc(degRA(c.ra))}\n<i>px ${Math.floor(h.ix)}, ${Math.floor(h.iy)}</i>`;
+  tag.innerHTML = `<b>RA </b> ${esc(fmtRA(c.ra))}\n<b>DEC</b> ${esc(fmtDec(c.dec))}`;
   tag.style.left = h.x + "px"; tag.style.top = h.y + "px";
   tag.style.transform = (h.x > r.width * 0.7 ? "translate(calc(-100% - 14px), " : "translate(14px, ") +
-                        (h.y > r.height * 0.62 ? "calc(-100% - 14px))" : "14px)");
+                        (h.y > r.height * 0.8 ? "calc(-100% - 14px))" : "14px)");
 }
 
-function placePick() {
-  const m = pvBox.querySelector(".selmark");
-  if (!sel.pick || !pvView.field) { m.hidden = true; return; }
-  const p = skyToPix(pvView.field, sel.pick.ra, sel.pick.dec);
-  if (pvView.inside(p.ix, p.iy)) pvView.place(m, p.ix, p.iy); else m.hidden = true;
-}
-
-function refreshSelInfo() {
-  $("selNone").hidden = !!sel.pick; $("selSome").hidden = !sel.pick;
-  if (!sel.pick) return;
-  $("sRa").textContent = fmtRA(sel.pick.ra); $("sDec").textContent = fmtDec(sel.pick.dec);
-  const p = pvView.field ? skyToPix(pvView.field, sel.pick.ra, sel.pick.dec) : null;
-  const inside = p && pvView.inside(p.ix, p.iy);
-  $("sPx").textContent = inside ? `${Math.floor(p.ix)}, ${Math.floor(p.iy)}` : "outside image";
-  $("selNote").textContent = inside
-    ? "Search finds every SPHEREx observation covering this position, in time order."
-    : "Outside this preview — Search will still query SPHEREx at these coordinates.";
+// Selection ring, and the dashed box of the field Search will fetch.
+function placePickMarks() {
+  const m = pvBox.querySelector(".selmark"), reg = pvBox.querySelector(".region");
+  const tgt = pk.pick || pk.center;
+  if (!tgt || !pvView.field || !pvView.hasImage) { m.hidden = reg.hidden = true; return; }
+  const p = skyToPix(pvView.field, tgt.ra, tgt.dec);
+  if (pk.pick && pvView.inside(p.ix, p.iy)) pvView.place(m, p.ix, p.iy); else m.hidden = true;
+  const h = heightArcsec();
+  if (!h || !pvView.inside(p.ix, p.iy)) { reg.hidden = true; return; }
+  const w = exploreWidth(h), s = pvView.field.scale;
+  const a = pvView.toScreen(p.ix - w / s / 2, p.iy - h / s / 2), b = pvView.toScreen(p.ix + w / s / 2, p.iy + h / s / 2);
+  reg.hidden = false;
+  Object.assign(reg.style, { left: a.x + "px", top: a.y + "px", width: (b.x - a.x) + "px", height: (b.y - a.y) + "px" });
+  reg.querySelector(".rtag").textContent = `${fmtArc(h)} × ${fmtArc(w)} FIELD`;
 }
 
 function setPick(c, fillInputs) {
-  sel.pick = c;
+  pk.pick = c;
   if (fillInputs) {
     $("ra").value = c.ra.toFixed(5); $("dec").value = (c.dec >= 0 ? "+" : "") + c.dec.toFixed(5);
     $("err").hidden = true;
   }
-  updateHints(); placePick(); refreshSelInfo();
+  updateHints(); updatePickLabel(); placePickMarks();
 }
 
 function updateHints() {
   const ra = parseRA($("ra").value), dec = parseDec($("dec").value);
-  $("raHint").textContent = ra !== null ? `= ${fmtRA(ra)}` : "Degrees, or hours: hh mm ss";
+  $("raHint").textContent = ra !== null ? `= ${fmtRA(ra)}` : "Degrees, or hh mm ss";
   $("decHint").textContent = dec !== null ? `= ${fmtDec(dec)}` : "Degrees, or ±dd mm ss";
 }
 
 function typedPosition(report) {
   const rs = $("ra").value, ds = $("dec").value, ra = parseRA(rs), dec = parseDec(ds);
   let err = "";
-  if (rs.trim() && ra === null) err = "RA must be 0–360° or hh mm ss.";
-  else if (ds.trim() && dec === null) err = "Dec must be −90° to +90° or ±dd mm ss.";
+  if (rs.trim() && ra === null) err = "RA should be 0–360° or hh mm ss.";
+  else if (ds.trim() && dec === null) err = "Dec should be −90° to +90° or ±dd mm ss.";
   else if (report && (ra === null || dec === null)) err = "Enter both a Right Ascension and a Declination.";
   $("err").hidden = !err; $("err").textContent = err;
   return ra !== null && dec !== null ? { ra, dec } : null;
@@ -407,114 +460,123 @@ function onTyped() {
   const p = pvView.field && skyToPix(pvView.field, c.ra, c.dec);
   if (!p || !pvView.inside(p.ix, p.iy)) loadPreview(c);
 }
+
+function runSearch() {
+  const c = typedPosition(true);
+  if (!c) return;
+  if (!heightArcsec()) { $("err").hidden = false; $("err").textContent = "Height should be 1–10 arcmin."; return; }
+  pk.pick = c;
+  writeHash(c);
+  openExplore(c);
+}
+
 $("ra").addEventListener("input", updateHints);
 $("dec").addEventListener("input", updateHints);
 $("ra").addEventListener("change", onTyped);
 $("dec").addEventListener("change", onTyped);
-$("band").addEventListener("change", () => loadPreview(sel.center));
+$("band").addEventListener("change", () => loadPreview(pk.center));
 $("size").addEventListener("input", () => {
-  const h = Number($("size").value);
-  $("sizeHint").textContent = h >= 60 && h <= 600
-    ? `Field ${fmtArc(h * WIDTH_RATIO)} × ${fmtArc(h)} · 60–600 arcsec`
-    : "60–600 arcsec · width is 2.5 × height";
+  const h = heightArcsec();
+  $("sizeHint").textContent = h ? `Field ${fmtArc(h)} × ${fmtArc(exploreWidth(h))} (width follows the viewer)` : "1–10 arcmin";
+  placePickMarks();
 });
-$("search").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const c = typedPosition(true);
-  if (!c) return;
-  const size = Number($("size").value);
-  if (!(size >= 60 && size <= 600)) { $("err").hidden = false; $("err").textContent = "Field height must be 60–600 arcsec."; return; }
-  ex.speed = ex.speed || 1;
-  writeHash(c);
-  openExplore(c);
-});
+$("search").addEventListener("submit", (e) => { e.preventDefault(); runSearch(); });
+$("toExplore").addEventListener("click", (e) => { e.preventDefault(); runSearch(); });
 
-// Preset targets. Coordinates are ICRS, in degrees.
-// Source: SIMBAD (basic table), queried 2026-11-14 via its official mirror
-// simbad.cfa.harvard.edu, because simbad.cds.unistra.fr was unavailable.
-// WISE 0855 uses the coordinates given in the project brief.
-// Barnard's Star and Epsilon Indi B move fast, so their J2000 positions were moved to epoch
-// 2026.0 using SIMBAD's proper motion, parallax and radial velocity (none listed for eps Ind B;
-// 0 used). RW Aur and R Dra are SIMBAD J2000 positions (slow movers).
-const PRESETS = [
-  { name: "WISE 0855",      ra: 133.795129, dec: -7.245147 },
-  { name: "Barnard's Star", ra: 269.446259, dec: 4.768324 },   // SIMBAD "NAME Barnard's star"; J2000 269.452077, +4.693365
-  { name: "Epsilon Indi B", ra: 331.096669, dec: -56.800649 }, // SIMBAD "* eps Ind B"; J2000 331.044147, -56.782844
-  { name: "RW Aurigae",     ra: 76.956526,  dec: 30.401438 },  // SIMBAD "V* RW Aur"
-  { name: "R Draconis",     ra: 248.167611, dec: 66.754979 },  // SIMBAD "V* R Dra"
-];
 PRESETS.forEach((t) => {
   const b = document.createElement("button");
-  b.type = "button"; b.className = "tb reset"; b.textContent = t.name;
+  b.type = "button"; b.className = "pr"; b.textContent = t.name; b.dataset.name = t.name;
+  b.title = `${t.name} · ${t.kind} · RA ${t.ra.toFixed(5)}°, Dec ${t.dec >= 0 ? "+" : ""}${t.dec.toFixed(5)}°`;
+  b.setAttribute("aria-pressed", "false");
+  // Fills RA/Dec, sets height 10′ and band D3, and runs the search.
   b.addEventListener("click", () => {
     $("ra").value = t.ra.toFixed(6);
     $("dec").value = (t.dec >= 0 ? "+" : "") + t.dec.toFixed(6);
-    $("size").value = 600; $("band").value = "SPHEREx-D3";
-    $("size").dispatchEvent(new Event("input"));   // refresh the size hint
+    $("size").value = PRESET_SIZE_ARCMIN; $("band").value = PRESET_BAND;
+    $("size").dispatchEvent(new Event("input"));
     updateHints();
-    $("search").requestSubmit();                    // same path as clicking Search
+    pk.pick = { ra: t.ra, dec: t.dec }; updatePickLabel();
+    runSearch();
   });
   $("presets").appendChild(b);
 });
 
 // ======================================================================
-// Page 2 – explore observations
+// 02 EXPLORE
 // ======================================================================
 const ex = {
-  target: null, band: "", h: 0, w: 0,
-  frames: [], current: 0, timer: null, playing: false, speed: 1,
-  pick: null,          // { ix, iy } field pixel the user clicked
+  target: null, name: "", band: "", h: 0, w: 0,
+  frames: [], current: 0, timer: null, playing: false, speedIdx: 2,
+  blink: false, blinkAlt: false, blinkTimer: null, diff: false,
+  pick: null, popAt: null,          // clicked field pixel, and where the click was on screen
   searchId: 0, listTotal: 0, done: 0, failed: 0, finished: false,
 };
 const exBox = $("exSky");
-const exView = new SkyView(exBox, $("explore"), {
-  onPick: (q) => { ex.pick = q; renderAbout(); placeExMarks(); },
+const exView = new SkyView(exBox, $("exZoom"), {
+  onPick: (q) => { ex.pick = q; renderPop(); placeExMarks(); },
   onChange: () => placeExMarks(),
 });
 
-function display() {
-  return { minb: Number($("minb").value), maxb: Number($("maxb").value), invert: $("invert").checked };
+function exLoading(text) { $("exLoading").hidden = !text; if (text) $("exLoadingText").textContent = text; }
+let toastTimer = null;
+function toast(msg) {
+  clearTimeout(toastTimer);
+  $("toast").textContent = msg; $("toast").hidden = false;
+  toastTimer = setTimeout(() => { $("toast").hidden = true; }, 2200);
 }
 
 async function openExplore(c) {
-  stop();
-  $("select").hidden = true; $("explore").hidden = false;
-  $("step1").classList.remove("on"); $("step2").classList.add("on");
+  stop(); stopBlink(); ex.diff = false;
+  $("pick").hidden = true; $("explore").hidden = false;
   window.scrollTo(0, 0);
 
-  const id = ++ex.searchId;
-  Object.assign(ex, { target: c, band: $("band").value, h: Number($("size").value), frames: [], current: 0,
-                      pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
-  ex.w = Math.min(1800, Math.round(ex.h * WIDTH_RATIO));
-  $("exTitle").textContent = `RA ${fmtRA(c.ra)} · Dec ${fmtDec(c.dec)}`;
-  $("strip").innerHTML = ""; $("exCredit").textContent = ""; $("fiObs").textContent = ""; $("fiLam").textContent = "";
+  const id = ++ex.searchId, p = presetAt(c);
+  Object.assign(ex, { target: c, name: p ? p.name : "Custom field", band: $("band").value, h: heightArcsec(),
+                      frames: [], current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
+  ex.w = exploreWidth(ex.h);
+  $("strip").innerHTML = ""; $("exCredit").textContent = "";
+  $("pop").hidden = true; $("noObs").hidden = true;
   exView.field = null; exView.clearImage();
-  exMsg("Searching IRSA for SPHEREx images…");
-  setStatus("Searching IRSA for SPHEREx images…");
-  renderAbout(); renderPlayback();
+  exLoading("Retrieving SPHEREx observations…");
+  renderInfo(); renderBar();
 
   let list;
   try { list = await getJSON(framesURL(c.ra, c.dec, ex.band)); }
-  catch (e) { if (id === ex.searchId) { exMsg("Search failed: " + e.message); setStatus("Search failed: " + e.message); } return; }
+  catch (e) {
+    if (id !== ex.searchId) return;
+    exLoading("");
+    $("noObsTitle").textContent = "Could not search IRSA";
+    $("noObsText").textContent = e.message + ". Go back and try again.";
+    $("noObs").hidden = false; return;
+  }
   if (id !== ex.searchId) return;
 
   let all = list.frames;
   ex.listTotal = all.length;
-  if (!all.length) { exMsg(`No SPHEREx ${ex.band.slice(-2)} images cover this position yet.`); setStatus("No observations found."); return; }
+  if (!all.length) {
+    exLoading("");
+    $("noObsTitle").textContent = "No SPHEREx observations found";
+    $("noObsText").textContent = "Nothing is available for these coordinates in the selected band. Go back and try another position or band.";
+    $("noObs").hidden = false; renderInfo(); return;
+  }
   if (all.length > MAX_FRAMES) {
     const step = all.length / MAX_FRAMES;
     all = Array.from({ length: MAX_FRAMES }, (_, i) => all[Math.floor(i * step)]);
   }
   ex.frames = all.map((f) => ({ ...f, cut: null, failed: false }));
-  buildStrip(); exMsg("Loading images…"); progress(); renderPlayback();
+  exLoading(`Retrieving SPHEREx observations… 0 of ${ex.frames.length}`);
+  buildStrip(); renderInfo(); renderBar();
 
-  // Download all cutouts in one streamed request: the server fetches several from IRSA at
-  // once and sends each frame back as soon as it is ready. Failed frames get one more try.
+  // All cutouts in one streamed request (the server fetches several from IRSA at once);
+  // failed frames get one more try.
   const received = (f, frame) => {
     if (frame) { f.cut = frame; if (f.failed) { f.failed = false; ex.failed--; } ex.done++; }
     else if (!f.failed) { f.failed = true; ex.failed++; }
-    progress(); updateChip(ex.frames.indexOf(f));
-    if (ex.frames[ex.current] === f) showFrame();
+    const i = ex.frames.indexOf(f);
+    renderInfo(); updateChip(i);
+    if (!exView.hasImage && frame && i === ex.current) exLoading("");
+    else if (!exView.hasImage) exLoading(`Retrieving SPHEREx observations… ${ex.done} of ${ex.frames.length}`);
+    if (i === ex.current || (ex.diff && i === ex.current - 1)) showFrame();
   };
   for (let pass = 0; pass < 2 && id === ex.searchId; pass++) {
     const batch = pass === 0 ? ex.frames.slice() : ex.frames.filter((f) => f.failed);
@@ -527,204 +589,289 @@ async function openExplore(c) {
     batch.forEach((f, i) => { if (!got.has(i)) received(f, null); });
   }
   if (id !== ex.searchId) return;
-  ex.finished = true; progress();
+  ex.finished = true; renderInfo();
   if (!ex.frames[ex.current].cut) { const first = ex.frames.findIndex((f) => f.cut); if (first >= 0) go(first); }
+  if (!ex.frames.some((f) => f.cut)) {
+    exLoading("");
+    $("noObsTitle").textContent = "Could not load the observations";
+    $("noObsText").textContent = "IRSA did not return any of the images. It may be busy; go back and try again.";
+    $("noObs").hidden = false;
+  }
 }
 
-function setStatus(t) { $("status").textContent = t; }
-function exMsg(t) { $("exMsg").hidden = !t; $("exMsg").textContent = t || ""; }
-function progress() {
-  const fr = ex.frames, a = shortDate(fr[0].date), b = shortDate(fr[fr.length - 1].date);
-  const range = a.year === b.year ? `${a.day} – ${b.day} ${b.year}` : `${a.day} ${a.year} – ${b.day} ${b.year}`;
-  const shown = ex.listTotal > fr.length ? ` (showing ${fr.length}, spread evenly in time)` : "";
-  const load = ex.finished ? (ex.failed ? ` · ${ex.failed} could not be loaded` : "")
-                           : ` · loading ${ex.done} of ${fr.length}…`;
-  setStatus(`${ex.listTotal} SPHEREx observations found${shown} · ${range} · Band ${ex.band.slice(-2)} (${BANDS[ex.band]}) · field ${fmtArc(ex.w)} × ${fmtArc(ex.h)}${load}`);
+function renderInfo() {
+  const c = ex.target; if (!c) return;
+  let s = `${ex.name} · ${fmtRA(c.ra)} ${fmtDec(c.dec)} · ${bandShort(ex.band)} (${BANDS[ex.band]}) · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
+  if (ex.frames.length) {
+    s += ` · ${ex.listTotal} observations` + (ex.listTotal > ex.frames.length ? ` (showing ${ex.frames.length})` : "");
+    s += ex.finished ? (ex.failed ? ` · ${ex.failed} not loaded` : "") : ` · loading ${ex.done}/${ex.frames.length}`;
+  }
+  $("regionInfo").textContent = s + " · data: NASA/IPAC IRSA · not an official NASA site";
 }
 
-// ---- frame strip
+// ---- date strip
+const qualityText = (f) => f.cut && f.cut.quality && f.cut.quality.length ? f.cut.quality.map((q) => q.name).join(", ") : "";
 function buildStrip() {
   const strip = $("strip"); strip.innerHTML = "";
   ex.frames.forEach((f, i) => {
     const d = shortDate(f.date), b = document.createElement("button");
     b.type = "button"; b.className = "fr";
-    b.setAttribute("aria-label", `Show observation ${i + 1}, ${d.day} ${d.year} ${d.time} UTC`);
-    b.innerHTML = `<b>${i + 1}</b><span>${esc(d.day)} ${esc(d.year)}</span><span>${esc(d.time)} UTC</span>`;
-    b.addEventListener("click", () => { go(i); });
+    b.innerHTML = `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
+    b.addEventListener("click", () => go(i));
     strip.appendChild(b);
+    updateChip(i);
   });
   updateStrip();
 }
 function updateChip(i) {
   const b = $("strip").children[i]; if (!b) return;
+  const f = ex.frames[i], d = shortDate(f.date), q = qualityText(f);
   b.classList.toggle("on", i === ex.current);
-  b.classList.toggle("past", i < ex.current);
-  b.classList.toggle("bad", ex.frames[i].failed);
+  b.classList.toggle("bad", f.failed);
+  b.setAttribute("aria-current", String(i === ex.current));
+  b.querySelector(".dotf").hidden = !q;
+  b.setAttribute("aria-label", `${d.day} ${d.year}, ${d.time} UTC${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
+  b.title = q ? `Quality flags at the target: ${q}` : "";
 }
 function updateStrip() {
   const strip = $("strip");
   for (let i = 0; i < strip.children.length; i++) updateChip(i);
   const b = strip.children[ex.current];
-  if (b) {   // keep the current chip in view without scrolling the page
+  if (b) {   // keep the current date in view without scrolling the page
     const l = b.offsetLeft - strip.offsetLeft, r = l + b.offsetWidth;
     if (l < strip.scrollLeft) strip.scrollLeft = l - 6;
     else if (r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = r - strip.clientWidth + 6;
   }
 }
 
-// ---- current frame
+// ---- the picture: normal, blink, or difference
+function shownIndex() { return ex.blink && ex.blinkAlt && ex.current > 0 ? ex.current - 1 : ex.current; }
 function showFrame() {
-  const f = ex.frames[ex.current]; if (!f) return;
-  const d = shortDate(f.date);
-  $("fiObs").textContent = `Obs ${ex.current + 1} of ${ex.frames.length} · ${d.day} ${d.year} · ${d.time} UTC`;
-  $("fiLam").textContent = f.cut && f.cut.wavelength_um
-    ? `λ ${f.cut.wavelength_um.toFixed(3)} µm · Band ${ex.band.slice(-2)}` : `Band ${ex.band.slice(-2)}`;
-  $("exCredit").innerHTML = `SPHEREx ${esc(f.collection.replace("spherex_", "").toUpperCase())} · ${esc(f.obs_id)} · ` +
-    `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
-  if (f.cut) { exView.setImage(f.cut, ex.target.ra, ex.target.dec, display()); exMsg(""); }
-  else { exView.clearImage(); exMsg(f.failed ? "This observation could not be loaded from IRSA." : "Loading this observation…"); }
-  updateStrip(); renderAbout(); renderPlayback(); placeExMarks();
-}
-function placeExMarks() {
-  const t = exBox.querySelector(".target"), pk = exBox.querySelector(".pick");
-  if (!exView.field) { t.hidden = pk.hidden = true; return; }
-  exView.place(t, exView.field.nx / 2, exView.field.ny / 2);
-  if (ex.pick) {
-    const p = exView.place(pk, ex.pick.ix, ex.pick.iy);
-    pk.classList.toggle("flip", p.x > exView.rect().width * 0.75);
-    pk.querySelector(".tag").textContent = "Selected";
-  } else pk.hidden = true;
+  const k = ex.current, f = ex.frames[k]; if (!f) return;
+  const di = shownIndex(), shown = ex.frames[di], d = shortDate(shown.date);
+  $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
+  $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
+    `${bandShort(ex.band)} · 6.15″/px`;
+  $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
+    `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
+
+  const prev = ex.frames[k - 1];
+  if (ex.diff && k > 0 && f.cut && prev && prev.cut) {
+    // Difference image: this observation minus the previous one, on a symmetric linear scale.
+    const data = f.cut.data.map((v, i) => (v === null || prev.cut.data[i] === null ? null : v - prev.cut.data[i]));
+    const mags = data.filter((v) => v !== null).map(Math.abs).sort((a, b) => a - b);
+    const m = percentile(mags, 99.5) || 1e-6;
+    exView.setImage({ ...f.cut, data }, ex.target.ra, ex.target.dec, { lo: -m, hi: m, invert: false, linear: true });
+    ex.diffData = data;
+  } else if (shown.cut) {
+    exView.setImage(shown.cut, ex.target.ra, ex.target.dec, DISPLAY);
+    ex.diffData = null;
+  } else {
+    exView.clearImage(); ex.diffData = null;
+    if (!$("explore").hidden && ex.frames.length) exLoading(shown.failed ? "" : "Retrieving this observation…");
+  }
+  if (shown.failed && !shown.cut) toast("This observation could not be loaded from IRSA");
+  if (exView.hasImage) exLoading("");
+  renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks();
 }
 
-// ---- "About this position"
-function row(k, v, s) {
-  return `<div class="row"><div class="k">${esc(k)}</div><div class="v">${v}</div><div class="s">${s}</div></div>`;
+function renderMode() {
+  const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], p = ex.frames[k - 1];
+  lbl.hidden = !(ex.blink || ex.diff);
+  if (!f) return;
+  const day = (x) => shortDate(x.date).day;
+  if (ex.blink) {
+    lbl.textContent = p ? `BLINK · ${day(p)} ↔ ${day(f)} · NOW ${day(ex.frames[shownIndex()])}` : "BLINK · NEEDS A PREVIOUS OBSERVATION";
+  } else if (ex.diff) {
+    if (!p) lbl.textContent = "DIFFERENCE · NEEDS A PREVIOUS OBSERVATION";
+    else {
+      const wl = (x) => (x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
+      lbl.textContent = `DIFFERENCE · ${day(f)} − ${day(p)} · λ ${wl(f)} vs ${wl(p)} µm`;
+    }
+  }
 }
-function renderAbout() {
-  const has = !!(ex.pick && exView.field);
-  $("abEmpty").hidden = has; $("abSel").hidden = !has;
-  if (!has) return;
+
+function placeExMarks() {
+  const edge = exBox.querySelector(".frameedge"), ring = exBox.querySelector(".selring");
+  if (!exView.field || !exView.hasImage) { edge.hidden = ring.hidden = true; return; }
+  const a = exView.toScreen(0, 0), b = exView.toScreen(exView.field.nx, exView.field.ny);
+  edge.hidden = a.y < 24;   // only when there is room above the image for the tag
+  ring.hidden = true;
+  Object.assign(edge.style, { left: a.x + "px", top: a.y + "px", width: (b.x - a.x) + "px", height: (b.y - a.y) + "px" });
+  $("regionTag").textContent = `YOUR REGION · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
+  if (ex.pick) exView.place(ring, ex.pick.ix, ex.pick.iy); else ring.hidden = true;
+  if (!$("pop").hidden) positionPop();
+}
+
+// ---- "About" pop-up for a clicked position (values read from the image shown)
+function prow(k, v, warn) { return `<div class="prow"><div class="k">${esc(k)}</div><div class="v${warn ? " warn" : ""}">${v}</div></div>`; }
+function renderPop() {
+  const pop = $("pop");
+  if (!ex.pick || !exView.field || !ex.frames.length) { pop.hidden = true; return; }
   const fld = exView.field, c = pixToSky(fld, ex.pick.ix, ex.pick.iy);
-  $("abId").textContent = `RA ${fmtRA(c.ra)} · Dec ${fmtDec(c.dec)}`;
-  const f = ex.frames[ex.current], d = shortDate(f.date);
+  const di = shownIndex(), f = ex.frames[di], d = shortDate(f.date);
   const px = Math.min(fld.nx - 1, Math.floor(ex.pick.ix)), py = Math.min(fld.ny - 1, Math.floor(ex.pick.iy));
-  const val = f.cut ? f.cut.data[py * f.cut.width + px] : undefined;
-  // Offset from the searched position, and position angle (east of north).
+  const isDiff = !!ex.diffData;
+  const val = isDiff ? ex.diffData[py * fld.nx + px] : f.cut ? f.cut.data[py * f.cut.width + px] : undefined;
   const de = -(ex.pick.ix - fld.nx / 2) * fld.scale, dn = (fld.ny / 2 - ex.pick.iy) * fld.scale;
   const off = Math.hypot(de, dn), pa = ((Math.atan2(de, dn) * 180 / Math.PI) + 360) % 360;
+  $("popId").textContent = `${fmtRA(c.ra)} ${fmtDec(c.dec)}`;
   const rows = [
-    row("Right Ascension", esc(fmtRA(c.ra)), esc(degRA(c.ra))),
-    row("Declination", esc(fmtDec(c.dec)), esc(degDec(c.dec))),
-    row("Surface brightness", val === undefined ? "—" : val === null ? "no data" : `${val.toFixed(3)} MJy/sr`,
-        `Zodi-subtracted · observation ${ex.current + 1}`),
-    row("Observation", `${ex.current + 1} of ${ex.frames.length}`, esc(`${d.day} ${d.year} · ${d.time} UTC · MJD ${f.mjd.toFixed(4)}`)),
-    row("Wavelength", f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—",
-        esc(`Band ${ex.band.slice(-2)} (${BANDS[ex.band]})`)),
-    row("Image pixel", `${px}, ${py}`, `Field pixel (x, y) · ${fld.scale}″ each`),
-    row("Offset from target", off < 0.05 ? "0″" : `${off.toFixed(1)}″`, off < 0.05 ? "At the searched position" : `Toward PA ${pa.toFixed(0)}°`),
-    row("Observation ID", esc(f.obs_id), esc(`SPHEREx ${f.collection.replace("spherex_", "").toUpperCase()}`)),
-    row("Source file", `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`, "Official NASA/IPAC archive"),
+    prow("RA", esc(fmtRA(c.ra))),
+    prow("Dec", esc(fmtDec(c.dec))),
+    prow(isDiff ? "Change vs previous" : "Brightness",
+      val === undefined ? "—" : val === null ? "no data" : `${isDiff && val > 0 ? "+" : ""}${val.toFixed(3)} MJy/sr`, val === null),
+    prow("Observed", esc(`${d.day} ${d.year} · ${d.time} UTC`)),
+    prow("Wavelength", f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
+    prow("Band", esc(`${bandShort(ex.band)} · ${BANDS[ex.band]}`)),
+    prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
+    prow("Source file", `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
   ];
-  $("abRows").innerHTML = rows.join("");
-  $("abNoData").hidden = val !== null;
-  $("abNoDataTitle").textContent = `No data in observation ${ex.current + 1} (${d.day} ${d.year} · ${d.time} UTC)`;
+  $("popRows").innerHTML = rows.join("");
+  $("popNoData").hidden = val !== null;
+  pop.hidden = false;
+  positionPop();
 }
-$("clearSel").addEventListener("click", () => { ex.pick = null; renderAbout(); placeExMarks(); });
+function positionPop() {
+  const pop = $("pop"), r = exView.rect();
+  const p = exView.toScreen(ex.pick.ix, ex.pick.iy), pw = pop.offsetWidth || 280, ph = pop.offsetHeight || 220;
+  let left = p.x < r.width * 0.6 ? p.x + 28 : p.x - pw - 28;
+  left = Math.max(8, Math.min(r.width - pw - 8, left));
+  const top = Math.max(8, Math.min(r.height - ph - 8, p.y - 60));
+  pop.style.left = left + "px"; pop.style.top = top + "px";
+}
+$("popClose").addEventListener("click", () => { ex.pick = null; $("pop").hidden = true; placeExMarks(); });
+["pointerdown", "pointerup", "wheel"].forEach((t) => $("pop").addEventListener(t, (e) => e.stopPropagation()));
+exBox.querySelectorAll(".zb").forEach((b) => b.addEventListener("pointerdown", (e) => e.stopPropagation()));
 
-// ---- playback
+// ---- playback (stops at the ends, like the design)
+const SPEED_LIST = [0.25, 0.5, 1, 1.5, 2, 3];
+const speedLabel = (s) => s.toFixed(s < 1 ? 2 : 1) + "x";
+function frameMs() { return BASE_FRAME_MS / SPEED_LIST[ex.speedIdx]; }
+function nextLoadable(from, dir) {
+  for (let i = from + dir; i >= 0 && i < ex.frames.length; i += dir) if (!ex.frames[i].failed) return i;
+  return -1;
+}
 function go(i) {
   if (!ex.frames.length) return;
-  ex.current = ((i % ex.frames.length) + ex.frames.length) % ex.frames.length;
+  ex.current = Math.max(0, Math.min(ex.frames.length - 1, i));
   showFrame();
   if (ex.playing) schedule();
 }
-function step(dir) {   // skips frames that failed to load
-  const n = ex.frames.length;
-  for (let k = 1; k <= n; k++) {
-    const i = (((ex.current + dir * k) % n) + n) % n;
-    if (!ex.frames[i].failed) return go(i);
-  }
-}
 function schedule() {
   clearTimeout(ex.timer);
-  if (ex.playing) ex.timer = setTimeout(() => step(1), BASE_FRAME_MS / ex.speed);
+  if (!ex.playing) return;
+  ex.timer = setTimeout(() => {
+    const n = nextLoadable(ex.current, 1);
+    if (n < 0) { stop(); toast(`Reached the last observation (${shortDate(ex.frames[ex.current].date).day})`); return; }
+    go(n);
+  }, frameMs());
 }
-function play() { if (!ex.frames.length) return; ex.playing = true; renderPlayback(); schedule(); }
-function stop() { ex.playing = false; clearTimeout(ex.timer); renderPlayback(); }
-function renderPlayback() {
-  $("play").classList.toggle("on", ex.playing);
-  $("play").setAttribute("aria-pressed", String(ex.playing));
+function play() {
+  if (ex.playing || !ex.frames.length) return;
+  if (nextLoadable(ex.current, 1) < 0) ex.current = 0;   // at the end: start again
+  ex.playing = true; showFrame(); schedule();
+}
+function stop() { ex.playing = false; clearTimeout(ex.timer); renderBar(); }
+function stepFrame(dir) {
+  const n = nextLoadable(ex.current, dir);
+  if (n < 0) { toast(dir < 0 ? "This is the first observation" : "This is the last observation"); return; }
+  go(n);
+}
+function renderBar() {
+  const n = ex.frames.length, k = ex.current;
+  $("frameNo").textContent = n ? `${shownIndex() + 1}/${n}` : "0/0";
+  const f = ex.frames[shownIndex()], q = f && f.cut ? f.cut.quality || [] : [];
+  const chip = $("flagChip");
+  chip.textContent = !f || !f.cut ? (f && f.failed ? "NOT LOADED" : "—") : q.length ? q.map((x) => x.name).join(" · ") : "QUALITY OK";
+  chip.classList.toggle("bad", q.length > 0 || !!(f && f.failed));
+  chip.title = q.length ? "SPHEREx quality flags within 1 pixel of the target: " + q.map((x) => `${x.name} (${x.desc})`).join("; ")
+                        : "No SPHEREx quality flags within 1 pixel of the target";
+  $("prev").setAttribute("aria-disabled", String(!n || nextLoadable(k, -1) < 0));
+  $("next").setAttribute("aria-disabled", String(!n || nextLoadable(k, 1) < 0));
+  $("play").classList.toggle("on", ex.playing); $("play").setAttribute("aria-pressed", String(ex.playing));
   $("pause").setAttribute("aria-pressed", String(!ex.playing));
-  const n = ex.frames.length;
-  $("pbStatus").textContent = n
-    ? `${ex.playing ? "Playing" : "Paused"} · frame ${ex.current + 1} / ${n} · ${(BASE_FRAME_MS / ex.speed / 1000).toFixed(2)} s per frame`
-    : "No frames yet";
-  $("speedLbl").textContent = ex.speed.toFixed(ex.speed % 1 && ex.speed < 1 ? 2 : 1) + "x";
-  $("speeds").querySelectorAll(".sp").forEach((b) => {
-    const on = Number(b.dataset.s) === ex.speed;
-    b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
-  });
+  $("blinkBtn").setAttribute("aria-pressed", String(ex.blink));
+  $("diffBtn").setAttribute("aria-pressed", String(ex.diff));
+  $("speedSel").value = String(ex.speedIdx);
 }
-SPEEDS.forEach((s) => {
-  const b = document.createElement("button");
-  b.type = "button"; b.className = "sp"; b.dataset.s = s;
-  b.textContent = s.toFixed(s % 1 && s < 1 ? 2 : 1) + "x";
-  b.addEventListener("click", () => { ex.speed = s; renderPlayback(); schedule(); writeHash(ex.target); });
-  $("speeds").appendChild(b);
-});
-$("prev").addEventListener("click", () => { stop(); step(-1); });
-$("next").addEventListener("click", () => { stop(); step(1); });
+SPEED_LIST.forEach((s, i) => { const o = document.createElement("option"); o.value = i; o.textContent = speedLabel(s); $("speedSel").appendChild(o); });
+function setSpeed(i) { ex.speedIdx = Math.max(0, Math.min(SPEED_LIST.length - 1, i)); renderBar(); schedule(); writeHash(ex.target); }
+$("speedSel").addEventListener("change", (e) => setSpeed(Number(e.target.value)));
+$("faster").addEventListener("click", () => setSpeed(ex.speedIdx + 1));
+$("slower").addEventListener("click", () => setSpeed(ex.speedIdx - 1));
+$("prev").addEventListener("click", () => { stop(); stepFrame(-1); });
+$("next").addEventListener("click", () => { stop(); stepFrame(1); });
 $("play").addEventListener("click", play);
 $("pause").addEventListener("click", stop);
-["minb", "maxb", "invert"].forEach((id) => $(id).addEventListener("input", () => {
-  const f = ex.frames[ex.current];
-  if (f && f.cut) exView.setImage(f.cut, ex.target.ra, ex.target.dec, display());
-  writeHash(ex.target);
-}));
+
+// ---- blink & difference
+function stopBlink() { clearInterval(ex.blinkTimer); ex.blink = false; ex.blinkAlt = false; }
+$("blinkBtn").addEventListener("click", () => {
+  if (ex.blink) { stopBlink(); showFrame(); return; }
+  ex.diff = false; ex.blink = true; ex.blinkAlt = false;
+  ex.blinkTimer = setInterval(() => { ex.blinkAlt = !ex.blinkAlt; showFrame(); }, BLINK_MS);
+  showFrame();
+});
+$("diffBtn").addEventListener("click", () => { stopBlink(); ex.diff = !ex.diff; showFrame(); });
+
+// ---- full screen
+function setFs(on) {
+  $("viewwrap").classList.toggle("fs", on);
+  $("fsBtn").setAttribute("aria-pressed", String(on));
+  $("fsBtn").setAttribute("aria-label", on ? "Exit full screen" : "Full screen");
+}
+$("fsBtn").addEventListener("click", () => setFs(!$("viewwrap").classList.contains("fs")));
+
 document.addEventListener("keydown", (e) => {
-  if ($("explore").hidden || /INPUT|SELECT|TEXTAREA|BUTTON/.test(e.target.tagName) && e.key === " ") return;
+  if ($("explore").hidden) return;
+  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); else setFs(false); return; }
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
-  if (e.key === "ArrowLeft") { stop(); step(-1); }
-  else if (e.key === "ArrowRight") { stop(); step(1); }
+  if (e.key === " " && e.target.tagName === "BUTTON") return;
+  if (e.key === "ArrowLeft") { stop(); stepFrame(-1); }
+  else if (e.key === "ArrowRight") { stop(); stepFrame(1); }
   else if (e.key === " ") { e.preventDefault(); ex.playing ? stop() : play(); }
 });
 
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
-  stop(); ex.searchId++;
+  stop(); stopBlink(); setFs(false); ex.searchId++;
   history.replaceState(null, "", location.pathname + location.search);
-  $("explore").hidden = true; $("select").hidden = false;
-  $("step2").classList.remove("on"); $("step1").classList.add("on");
+  $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;
-  if (c) {
-    setPick(c, true);
-    const p = pvView.field && skyToPix(pvView.field, c.ra, c.dec);
-    if (!p || !pvView.inside(p.ix, p.iy) || $("band").value !== sel.band) loadPreview(c);
-  }
-  requestAnimationFrame(() => pvView.draw());
+  requestAnimationFrame(() => {
+    if (c) {
+      setPick(c, true);
+      const p = pvView.field && skyToPix(pvView.field, c.ra, c.dec);
+      if (!p || !pvView.inside(p.ix, p.iy) || $("band").value !== pk.band) loadPreview(c);
+    }
+    pvView.draw();
+  });
 });
 
 // ======================================================================
 // Shareable URL (like WiseView's #ra=...&dec=...)
 // ======================================================================
 function writeHash(c) {
+  if (!c) return;
   const p = new URLSearchParams();
   p.set("ra", +c.ra.toFixed(6)); p.set("dec", +c.dec.toFixed(6));
-  p.set("size", $("size").value); p.set("band", $("band").value);
-  p.set("speed", ex.speed); p.set("minb", $("minb").value); p.set("maxb", $("maxb").value);
-  p.set("invert", $("invert").checked ? 1 : 0);
+  p.set("size", heightArcsec() || 240); p.set("band", $("band").value);
+  p.set("speed", SPEED_LIST[ex.speedIdx]);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
   if (p.has("band") && BANDS[p.get("band")]) $("band").value = p.get("band");
-  if (p.has("size")) $("size").value = p.get("size");
-  ["minb", "maxb"].forEach((k) => { if (p.has(k)) $(k).value = p.get(k); });
-  if (p.has("invert")) $("invert").checked = p.get("invert") === "1";
+  if (p.has("size")) {   // stored in arcsec
+    const m = Math.round(Number(p.get("size")) / 60);
+    if (m >= 1) $("size").value = Math.min(10, m);
+  }
   if (p.has("speed")) {
     let s = Number(p.get("speed"));
     if (s > 10) s = BASE_FRAME_MS / s;     // older links stored milliseconds per frame
-    ex.speed = SPEEDS.reduce((a, b) => Math.abs(b - s) < Math.abs(a - s) ? b : a, 1);
+    let best = 2; SPEED_LIST.forEach((x, i) => { if (Math.abs(x - s) < Math.abs(SPEED_LIST[best] - s)) best = i; });
+    ex.speedIdx = best;
   }
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
@@ -736,13 +883,14 @@ function readHash() {
 (function start() {
   const c = readHash();
   $("size").dispatchEvent(new Event("input"));
-  renderPlayback();
+  renderBar();
   if (c) {
-    sel.pick = c; sel.center = { ...c };
     $("ra").value = c.ra.toFixed(5); $("dec").value = (c.dec >= 0 ? "+" : "") + c.dec.toFixed(5);
-    updateHints();
+    pk.pick = c; pk.center = { ...c }; updateHints(); updatePickLabel();
     openExplore(c);
   } else {
-    loadPreview(DEFAULT_POS);
+    const s = PRESETS.find((p) => p.name === START_PRESET);
+    setPick({ ra: s.ra, dec: s.dec }, true);
+    loadPreview(s);
   }
 })();

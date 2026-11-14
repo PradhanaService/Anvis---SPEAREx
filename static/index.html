@@ -3,192 +3,170 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Anvis – SPHEREx Time Viewer</title>
+<title>Anvis – SPHEREx Sky Explorer</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600;700;800;900&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<div class="page">
 
-<header class="top">
-  <div class="brand">
-    <svg width="40" height="40" viewBox="0 0 40 40" fill="none" stroke="#ffffff" stroke-width="1.5" aria-hidden="true"><circle cx="20" cy="20" r="18"></circle><ellipse cx="20" cy="20" rx="18" ry="7"></ellipse><circle cx="20" cy="20" r="3" fill="#22c55e" stroke="none"></circle></svg>
-    <div>
-      <div class="kicker">NASA SPHEREx · All-sky spectral survey</div>
-      <h1>Anvis</h1>
+<!-- ======================= 01 PICK ======================= -->
+<div id="pick" class="app pick">
+  <aside class="side" aria-label="Coordinate selection">
+    <div class="brand">
+      <svg width="22" height="22" viewBox="0 0 40 40" fill="none" stroke="#0b0b0b" stroke-width="2.2" aria-hidden="true"><circle cx="20" cy="20" r="17"></circle><ellipse cx="20" cy="20" rx="17" ry="6.5" transform="rotate(-20 20 20)"></ellipse><circle cx="20" cy="20" r="3.5" fill="#E03C31" stroke="none"></circle></svg>
+      <span class="bname">ANVIS</span>
+      <span class="bsub">SPHEREX</span>
     </div>
-  </div>
-  <ol class="steps">
-    <li id="step1" class="on"><span>1</span><span>Select coordinates</span></li>
-    <li id="step2"><span>2</span><span>Explore observations</span></li>
-  </ol>
-</header>
 
-<!-- ============ Page 1: select coordinates ============ -->
-<main id="select" class="panel">
-  <div class="bar">
-    <div>
-      <h2 id="pvTitle">Sky preview</h2>
-      <p id="pvSub" class="muted">Loading a SPHEREx image…</p>
-    </div>
-    <div class="tools">
-      <span class="muted hint">Drag to pan · scroll to zoom · click to select</span>
-      <div class="zoom">
-        <button class="tb" type="button" data-zoom="out" aria-label="Zoom out"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
-        <span class="zpct">100%</span>
-        <button class="tb" type="button" data-zoom="in" aria-label="Zoom in"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10M8 3v10"></path></svg></button>
+    <form id="search" class="sform" novalidate>
+      <div class="fgroup">
+        <label for="ra"><span class="mk mk-ra"></span>RIGHT ASCENSION (RA)</label>
+        <input id="ra" class="fld ra" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="deg or hh mm ss">
+        <span class="hint" id="raHint">Degrees, or hh mm ss</span>
       </div>
-      <button class="tb reset" type="button" data-zoom="reset">Reset view</button>
-    </div>
-  </div>
-
-  <div id="pvSky" class="sky wide-map">
-    <canvas></canvas>
-    <div class="ov compass-tl">
-      <svg width="46" height="46" viewBox="0 0 46 46" fill="none" stroke="#ffffff" stroke-width="1.5" role="img" aria-label="Orientation: North up, East left"><path d="M34 34V10"></path><path d="M30 14l4-4 4 4"></path><path d="M34 34H10"></path><path d="M14 30l-4 4 4 4"></path><text x="30" y="8" fill="#ffffff" stroke="none" font-size="9" font-family="Space Grotesk, sans-serif">N</text><text x="1" y="31" fill="#ffffff" stroke="none" font-size="9" font-family="Space Grotesk, sans-serif">E</text></svg>
-      <span>North up<br>East left</span>
-    </div>
-    <div class="ov scale"><div class="scalebar"></div><span class="scalelbl"></span></div>
-    <div class="ov credit" id="pvCredit"></div>
-    <div class="ov msg" id="pvMsg">Loading…</div>
-    <div class="cross-h" hidden></div><div class="cross-v" hidden></div>
-    <div class="hovertag" hidden></div>
-    <div class="selmark" hidden><div class="ring"></div><div class="dot"></div><div class="tag">Selected</div></div>
-  </div>
-
-  <div class="below">
-    <section class="selinfo">
-      <h3 class="label">Selected position</h3>
-      <div id="selNone"><p class="lead">Move over the sky image to read coordinates, then click to capture a position. You can also type coordinates directly.</p></div>
-      <div id="selSome" hidden>
-        <div class="grid3 mono">
-          <div><div class="k">Right Ascension</div><div class="v" id="sRa"></div></div>
-          <div><div class="k">Declination</div><div class="v" id="sDec"></div></div>
-          <div><div class="k">Image pixel (x, y)</div><div class="v" id="sPx"></div></div>
-        </div>
-        <p class="muted small" id="selNote"></p>
+      <div class="fgroup">
+        <label for="dec"><span class="mk mk-dec"></span>DECLINATION (DEC)</label>
+        <input id="dec" class="fld dec" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="deg or ±dd mm ss">
+        <span class="hint" id="decHint">Degrees, or ±dd mm ss</span>
       </div>
-    </section>
-
-    <form id="search" class="form" novalidate>
-      <label for="ra">Right Ascension (RA)</label>
-      <div><input id="ra" class="fld ra" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="270.00000  or  18 00 00"><div class="hintline" id="raHint">Degrees, or hours: hh mm ss</div></div>
-      <label for="dec">Declination (Dec)</label>
-      <div><input id="dec" class="fld dec" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="+66.56071  or  +66 33 39"><div class="hintline" id="decHint">Degrees, or ±dd mm ss</div></div>
-      <label for="band">Band</label>
-      <div>
+      <div class="fgroup">
+        <label for="size">HEIGHT <span class="lite">(ARCMIN)</span></label>
+        <input id="size" class="fld" type="number" min="1" max="10" step="1" value="4">
+        <span class="hint" id="sizeHint">1–10 arcmin</span>
+      </div>
+      <div class="fgroup">
+        <label for="band">BAND <span class="lite">(DETECTOR)</span></label>
         <select id="band" class="fld">
           <option value="SPHEREx-D1">D1 · 0.75–1.09 µm</option>
-          <option value="SPHEREx-D2" selected>D2 · 1.10–1.62 µm</option>
-          <option value="SPHEREx-D3">D3 · 1.63–2.41 µm</option>
+          <option value="SPHEREx-D2">D2 · 1.10–1.62 µm</option>
+          <option value="SPHEREx-D3" selected>D3 · 1.63–2.41 µm</option>
           <option value="SPHEREx-D4">D4 · 2.42–3.82 µm</option>
           <option value="SPHEREx-D5">D5 · 3.83–4.41 µm</option>
           <option value="SPHEREx-D6">D6 · 4.42–5.00 µm</option>
         </select>
+        <span class="hint" id="bandHint"></span>
       </div>
-      <label for="size">Field height (″)</label>
-      <div><input id="size" class="fld" type="number" min="60" max="600" step="10" value="240"><div class="hintline" id="sizeHint">60–600 arcsec · width is 2.5 × height</div></div>
       <p id="err" class="err" role="alert" hidden></p>
-      <div class="go-row">
-        <button class="go" type="submit"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><circle cx="7" cy="7" r="4.5"></circle><path d="M10.5 10.5L14 14"></path></svg>Search</button>
-        <span class="muted small">Finds SPHEREx observations covering this position</span>
-      </div>
-      <div class="go-row" id="presets">
-        <span class="muted small">Presets:</span>
-      </div>
+      <button class="go" type="submit">SEARCH<span class="gocirc"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#ffffff" stroke-width="2" aria-hidden="true"><path d="M3 9h11M10 4.5L14.5 9 10 13.5"></path></svg></span></button>
     </form>
-  </div>
-</main>
 
-<!-- ============ Page 2: explore observations ============ -->
-<main id="explore" class="panel" hidden>
-  <div class="bar">
-    <div class="titlecol">
-      <a href="#" id="back" class="back"><svg width="14" height="14" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M9 2L4 7l5 5"></path></svg>Change coordinates</a>
-      <h2 class="mono" id="exTitle"></h2>
-      <p class="muted" id="status" role="status"></p>
+    <div class="presetbox">
+      <span class="ptitle">PRESETS</span>
+      <div role="group" aria-label="Preset targets" class="presets" id="presets"></div>
+      <span class="disclaim">Independent prototype using NASA SPHEREx data from IRSA. Not an official NASA website.</span>
     </div>
-    <div class="tools">
-      <span class="muted hint">Click the image to read a position · drag to pan</span>
-      <div class="zoom">
-        <button class="tb" type="button" data-zoom="out" aria-label="Zoom out"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
+  </aside>
+
+  <section class="main">
+    <div class="topbar">
+      <div class="zoomrow" id="pvZoom">
+        <button class="tb" type="button" data-zoom="in" aria-label="Zoom in"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10M8 3v10"></path></svg></button>
+        <button class="tb" type="button" data-zoom="out" aria-label="Zoom out"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
+        <button class="tb" type="button" data-zoom="reset" aria-label="Reset view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="2"></circle><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"></path></svg></button>
         <span class="zpct">100%</span>
-        <button class="tb" type="button" data-zoom="in" aria-label="Zoom in"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10M8 3v10"></path></svg></button>
       </div>
-      <button class="tb reset" type="button" data-zoom="reset">Reset view</button>
+      <nav aria-label="Steps" class="tabs">
+        <span aria-current="page" class="tab on"><span class="num">01</span>PICK</span>
+        <span aria-hidden="true" class="tabsep"></span>
+        <a class="tab" href="#" id="toExplore"><span class="num">02</span>EXPLORE</a>
+      </nav>
     </div>
-  </div>
 
-  <div id="exSky" class="sky wide-frame">
-    <canvas></canvas>
-    <div class="ov frameinfo"><span id="fiObs"></span><span id="fiLam"></span></div>
-    <div class="ov compass-tr">
-      <svg width="46" height="46" viewBox="0 0 46 46" fill="none" stroke="#ffffff" stroke-width="1.5" role="img" aria-label="Orientation: North up, East left"><path d="M34 34V10"></path><path d="M30 14l4-4 4 4"></path><path d="M34 34H10"></path><path d="M14 30l-4 4 4 4"></path><text x="30" y="8" fill="#ffffff" stroke="none" font-size="9" font-family="Space Grotesk, sans-serif">N</text><text x="1" y="31" fill="#ffffff" stroke="none" font-size="9" font-family="Space Grotesk, sans-serif">E</text></svg>
+    <div id="pvSky" class="sky">
+      <canvas></canvas>
+      <div class="ov label">
+        <svg width="28" height="28" viewBox="0 0 46 46" fill="none" stroke="#ffffff" stroke-width="1.6" role="img" aria-label="Orientation: North up, East left"><path d="M34 34V10"></path><path d="M30 14l4-4 4 4"></path><path d="M34 34H10"></path><path d="M14 30l-4 4 4 4"></path><text x="30" y="8" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">N</text><text x="1" y="31" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">E</text></svg>
+        <span class="lblt"><b id="pvName">Custom field</b><span class="mono" id="pvSubl"></span></span>
+      </div>
+      <div class="ov scale"><div class="scalebar"></div><span class="scalelbl"></span></div>
+      <div class="ov hintbar">Drag to pan · scroll to zoom · click to pick · <span id="pvCredit">SPHEREx image from IRSA</span></div>
+      <div class="region" hidden><div class="rtag"></div></div>
+      <div class="cross-h" hidden></div><div class="cross-v" hidden></div>
+      <div class="hovertag" hidden></div>
+      <div class="selmark" hidden><div class="ring"></div><div class="dot"></div></div>
+      <div class="loading" id="pvLoading" role="status" hidden><span class="spin"></span><span id="pvLoadingText">Loading SPHEREx image…</span></div>
     </div>
-    <div class="ov scale"><div class="scalebar"></div><span class="scalelbl"></span></div>
-    <div class="ov credit" id="exCredit"></div>
-    <div class="ov msg" id="exMsg" hidden></div>
-    <div class="target" hidden><div class="ring"></div><div class="tag">Target</div></div>
-    <div class="pick" hidden><div class="ring"></div><div class="tag"></div></div>
-  </div>
-
-  <div class="strip" role="group" aria-label="Observation frames" id="strip"></div>
-
-  <div class="lower">
-    <section class="about" aria-live="polite">
-      <h3>About this position</h3>
-      <div id="abEmpty" class="ab-empty">
-        <p class="lead">Click anywhere in the image to read its position and measured brightness.</p>
-        <p class="muted small">Values are read directly from the SPHEREx image shown. The selection stays marked while you play through the observations.</p>
-      </div>
-      <div id="abSel" hidden>
-        <div class="ab-head">
-          <span class="mono ab-id" id="abId"></span>
-          <button class="tb" type="button" id="clearSel">Clear selection</button>
-        </div>
-        <div class="grid3" id="abRows"></div>
-        <div class="nodata" id="abNoData" role="status" hidden>
-          <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="#f59e0b" stroke-width="1.6" aria-hidden="true"><path d="M10 2.5L18 17H2z"></path><path d="M10 8v4M10 14.5v.5"></path></svg>
-          <div><strong id="abNoDataTitle"></strong><span>This pixel has no valid measurement in this image (for example a saturated star or a detector edge).</span></div>
-        </div>
-      </div>
-    </section>
-
-    <section class="playback">
-      <h3 class="label">Observation playback</h3>
-      <div class="pbrow">
-        <button class="pb" type="button" id="prev" aria-label="Previous observation"><svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M13.5 3.5v11L5.5 9z"></path><rect x="3" y="3.5" width="1.8" height="11"></rect></svg></button>
-        <button class="pb" type="button" id="pause" aria-label="Pause" aria-pressed="true"><svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><rect x="4" y="3.5" width="3.4" height="11" rx="0.6"></rect><rect x="10.6" y="3.5" width="3.4" height="11" rx="0.6"></rect></svg></button>
-        <button class="pb" type="button" id="play" aria-label="Play" aria-pressed="false"><svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M5.5 3.2v11.6L14.5 9z"></path></svg></button>
-        <button class="pb" type="button" id="next" aria-label="Next observation"><svg width="18" height="18" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M4.5 3.5v11L12.5 9z"></path><rect x="13.2" y="3.5" width="1.8" height="11"></rect></svg></button>
-      </div>
-      <div class="mono pbstatus" id="pbStatus"></div>
-      <div class="speedbox">
-        <div class="speedlbl">Speed: <span class="mono" id="speedLbl"></span></div>
-        <div class="chips" role="group" aria-label="Playback speed" id="speeds"></div>
-      </div>
-      <div class="display">
-        <h3 class="label">Display</h3>
-        <div class="disprow">
-          <label>Min brightness (%)<input id="minb" class="fld" type="number" min="0" max="100" step="0.5" value="1"></label>
-          <label>Max brightness (%)<input id="maxb" class="fld" type="number" min="0" max="100" step="0.5" value="99.5"></label>
-          <label class="chk"><input id="invert" type="checkbox"> Invert</label>
-        </div>
-      </div>
-    </section>
-  </div>
-</main>
-
-<footer>
-  Images: SPHEREx spectral images (DR1 and QR3) from the
-  <a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">NASA/IPAC Infrared Science Archive</a>,
-  accessed as shown in the <a href="https://caltech-ipac.github.io/irsa-tutorials/spherex/" target="_blank" rel="noopener">SPHEREx tutorial notebooks</a>.
-  Player inspired by <a href="http://byw.tools/wiseview" target="_blank" rel="noopener">WiseView</a>.
-  Each frame is zodiacal-light subtracted and resampled north-up at SPHEREx's native 6.15″ pixels; SPHEREx's wavelength varies across its detectors, so each frame samples a slightly different wavelength.
-</footer>
+  </section>
 </div>
+
+<!-- ======================= 02 EXPLORE ======================= -->
+<div id="explore" class="app ex" hidden>
+  <div class="extop">
+    <a class="bk" href="#" id="back"><span class="bkcirc"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M15 9H4M8 4.5L3.5 9 8 13.5"></path></svg></span>Back</a>
+    <span class="regioninfo mono" id="regionInfo"></span>
+  </div>
+
+  <div class="viewwrap" id="viewwrap">
+    <div id="exSky" class="sky">
+      <canvas></canvas>
+      <div class="frameedge" hidden><div class="rtag" id="regionTag"></div></div>
+      <div class="selring" hidden></div>
+      <div class="ov label">
+        <svg width="28" height="28" viewBox="0 0 46 46" fill="none" stroke="#ffffff" stroke-width="1.6" role="img" aria-label="Orientation: North up, East left"><path d="M34 34V10"></path><path d="M30 14l4-4 4 4"></path><path d="M34 34H10"></path><path d="M14 30l-4 4 4 4"></path><text x="30" y="8" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">N</text><text x="1" y="31" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">E</text></svg>
+        <span class="lblt"><b id="shownDate"></b><span class="mono" id="chanShort"></span></span>
+      </div>
+      <div class="ov modelbl mono" id="modeLabel" hidden></div>
+      <div class="zstack" id="exZoom">
+        <button class="zb" type="button" data-zoom="in" aria-label="Zoom in"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10M8 3v10"></path></svg></button>
+        <button class="zb" type="button" data-zoom="out" aria-label="Zoom out"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
+        <button class="zb" type="button" id="fsBtn" aria-label="Full screen" aria-pressed="false"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M2 6V2h4M14 6V2h-4M2 10v4h4M14 10v4h-4"></path></svg></button>
+        <button class="zb" type="button" data-zoom="reset" aria-label="Reset view"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><circle cx="8" cy="8" r="2"></circle><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"></path></svg></button>
+      </div>
+      <div class="ov scale"><div class="scalebar"></div><span class="scalelbl"></span></div>
+      <div class="ov credit" id="exCredit"></div>
+      <div class="toast" role="status" id="toast" hidden></div>
+
+      <div class="pop" role="dialog" aria-label="About this position" id="pop" hidden>
+        <div class="pophead">
+          <div class="poptitle">
+            <span class="popk">ABOUT: <span class="popt">Position</span></span>
+            <span class="mono popid" id="popId"></span>
+          </div>
+          <button class="cx" type="button" id="popClose" aria-label="Close"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+        </div>
+        <div class="poprows" id="popRows"></div>
+        <div class="popwarn" id="popNoData" hidden>
+          <strong>No data at this position</strong>
+          <span>This pixel has no valid measurement in this observation (for example a saturated star or a detector edge).</span>
+        </div>
+      </div>
+
+      <div class="loading" id="exLoading" role="status" hidden><span class="spin"></span><span id="exLoadingText">Retrieving SPHEREx observations…</span></div>
+      <div class="noobs" id="noObs" role="status" hidden>
+        <strong id="noObsTitle">No SPHEREx observations found</strong>
+        <span id="noObsText">Nothing is available for these coordinates in the selected band. Go back and try another position or band.</span>
+      </div>
+    </div>
+
+    <div class="cbar">
+      <div class="cleft">
+        <span class="mono small" id="frameNo">0/0</span>
+        <span class="flag mono" id="flagChip">QUALITY OK</span>
+        <button class="md" type="button" id="blinkBtn" aria-pressed="false">BLINK</button>
+        <button class="md" type="button" id="diffBtn" aria-pressed="false">DIFF</button>
+      </div>
+      <div class="cmid">
+        <button class="pb plain" type="button" id="prev" aria-label="Previous observation"><svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M13.5 3.5v11L5.5 9z"></path><rect x="3" y="3.5" width="1.8" height="11"></rect></svg></button>
+        <button class="pb ring" type="button" id="play" aria-label="Play" aria-pressed="false"><svg width="14" height="14" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M5.5 3.2v11.6L14.5 9z"></path></svg></button>
+        <button class="pb ring" type="button" id="pause" aria-label="Pause" aria-pressed="true"><svg width="14" height="14" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><rect x="4" y="3.5" width="3.4" height="11"></rect><rect x="10.6" y="3.5" width="3.4" height="11"></rect></svg></button>
+        <button class="pb plain" type="button" id="next" aria-label="Next observation"><svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M4.5 3.5v11L12.5 9z"></path><rect x="13.2" y="3.5" width="1.8" height="11"></rect></svg></button>
+      </div>
+      <div class="cright">
+        <label for="speedSel" class="mono">SPEED:</label>
+        <select id="speedSel" class="sel mono"></select>
+        <div class="pm">
+          <button class="sb" type="button" id="faster" aria-label="Faster">+</button>
+          <button class="sb" type="button" id="slower" aria-label="Slower">−</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div role="group" aria-label="Observation dates" class="strip" id="strip"></div>
+</div>
+
 <script src="app.js"></script>
 </body>
 </html>

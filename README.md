@@ -21,14 +21,19 @@ HTML/CSS/JS in `static/`.
 
 The app has two pages:
 
-1. **Select coordinates** – a real SPHEREx image (30′ × 10.5′) you can pan, zoom and hover to
-   read coordinates; click to pick a position, or type RA/Dec (degrees or sexagesimal).
-   Choose the band (D1–D6) and field height, then Search.
-2. **Explore observations** – every SPHEREx image of that field in time order, with a frame
-   strip, Prev / Pause / Play / Next, speed chips (0.25x–3x), brightness/invert controls,
-   zoom and pan, ←/→/space keys, and a shareable URL (`#ra=...&dec=...&size=...&band=...`).
-   Click the image to read the position, measured surface brightness (MJy/sr) and wavelength
-   in each frame; every frame links to its original FITS file at IRSA.
+1. **01 Pick** – a sidebar (RA, Dec, height in arcmin, band D1–D6, Search, five presets) next to a
+   real SPHEREx image you can pan, zoom and hover to read coordinates; click to pick a position.
+   A dashed box shows the field that Search will fetch. Presets fill the target, set height 10′
+   and band D3, and run the search.
+2. **02 Explore** – every SPHEREx image of that field in time order: a date strip, Prev / Play /
+   Pause / Next (stops at the ends), speed 0.25x–3x, BLINK (alternate with the previous
+   observation), DIFF (this observation minus the previous one), full screen, zoom and pan,
+   ←/→/space/Esc keys, and a shareable URL (`#ra=...&dec=...&size=...&band=...`).
+   The quality chip and red dots on dates show SPHEREx quality flags at the target (from each
+   image's FLAGS extension). Click the image for an "About" pop-up with the position, measured
+   surface brightness (MJy/sr), wavelength and the original FITS file at IRSA.
+
+This is an independent tool using NASA SPHEREx data from IRSA; it is not an official NASA website.
 
 Note: SPHEREx's wavelength varies across its detectors, so each frame samples a slightly
 different wavelength within the band. The wavelength is shown with each frame.
