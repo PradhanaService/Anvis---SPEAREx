@@ -127,10 +127,30 @@
           <button class="cx" type="button" id="popClose" aria-label="Close"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
         </div>
         <div class="poprows" id="popRows"></div>
+        <button class="md popspec" type="button" id="popSpec">SPECTRUM HERE</button>
         <div class="popwarn" id="popNoData" hidden>
           <strong>No data at this position</strong>
           <span>This pixel has no valid measurement in this observation (for example a saturated star or a detector edge).</span>
         </div>
+      </div>
+
+      <div class="spec" id="spec" role="dialog" aria-label="Spectrum" hidden>
+        <div class="spechead">
+          <div class="poptitle">
+            <span class="popk">SPECTRUM: <span class="popt" id="specWhat"></span></span>
+            <span class="mono popid" id="specPos"></span>
+          </div>
+          <div class="specbtns">
+            <button class="md" type="button" id="specLog" aria-pressed="false">LOG</button>
+            <button class="md" type="button" id="specTable" aria-pressed="false">TABLE</button>
+            <a class="md" id="specCsv" href="#" download="spectrum.csv">CSV</a>
+            <button class="cx" type="button" id="specClose" aria-label="Close spectrum"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+          </div>
+        </div>
+        <div class="specstatus mono" id="specStatus" role="status"></div>
+        <div class="specplot" id="specPlot"><svg id="specSvg" role="img" aria-label="Spectrum: flux density against wavelength"></svg><div class="spectip mono" id="specTip" hidden></div></div>
+        <div class="spectable mono" id="specTableBox" hidden></div>
+        <div class="speclegend" id="specLegend"></div>
       </div>
 
       <div class="loading" id="exLoading" role="status" hidden><span class="spin"></span><span id="exLoadingText">Retrieving SPHEREx observations…</span></div>
@@ -146,6 +166,8 @@
         <span class="flag mono" id="flagChip">QUALITY OK</span>
         <button class="md" type="button" id="blinkBtn" aria-pressed="false">BLINK</button>
         <button class="md" type="button" id="diffBtn" aria-pressed="false">DIFF</button>
+        <button class="md" type="button" id="stackBtn" aria-pressed="false" disabled title="Available when all exposures are loaded">STACK</button>
+        <button class="md" type="button" id="specBtn" aria-pressed="false">SPECTRUM</button>
       </div>
       <div class="cmid">
         <button class="pb plain" type="button" id="prev" aria-label="Previous observation"><svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M13.5 3.5v11L5.5 9z"></path><rect x="3" y="3.5" width="1.8" height="11"></rect></svg></button>

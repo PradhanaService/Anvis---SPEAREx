@@ -510,6 +510,7 @@ const ex = {
   blink: false, blinkAlt: false, blinkTimer: null, diff: false,
   pick: null, popAt: null,          // clicked field pixel, and where the click was on screen
   searchId: 0, listTotal: 0, done: 0, failed: 0, finished: false,
+  exposures: [], stacked: false, wantStack: false,   // STACK: ex.frames becomes one median image per sky pass
 };
 const exBox = $("exSky");
 const exView = new SkyView(exBox, $("exZoom"), {
@@ -526,13 +527,14 @@ function toast(msg) {
 }
 
 async function openExplore(c) {
-  stop(); stopBlink(); ex.diff = false;
+  stop(); stopBlink(); ex.diff = false; closeSpectrum();
   $("pick").hidden = true; $("explore").hidden = false;
   window.scrollTo(0, 0);
 
   const id = ++ex.searchId, p = presetAt(c);
   Object.assign(ex, { target: c, name: p ? p.name : "Custom field", band: $("band").value, h: heightArcsec(),
-                      frames: [], current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
+                      frames: [], exposures: [], stacked: false, current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
+  $("stackBtn").disabled = true;
   ex.w = exploreWidth(ex.h);
   $("strip").innerHTML = ""; $("exCredit").textContent = "";
   $("pop").hidden = true; $("noObs").hidden = true;
@@ -563,7 +565,7 @@ async function openExplore(c) {
     const step = all.length / MAX_FRAMES;
     all = Array.from({ length: MAX_FRAMES }, (_, i) => all[Math.floor(i * step)]);
   }
-  ex.frames = all.map((f) => ({ ...f, cut: null, failed: false }));
+  ex.frames = ex.exposures = all.map((f) => ({ ...f, cut: null, failed: false }));
   exLoading(`Retrieving SPHEREx observations… 0 of ${ex.frames.length}`);
   buildStrip(); renderInfo(); renderBar();
 
@@ -591,7 +593,10 @@ async function openExplore(c) {
   }
   if (id !== ex.searchId) return;
   ex.finished = true; renderInfo();
+  $("stackBtn").disabled = !ex.frames.some((f) => f.cut);
+  $("stackBtn").title = "Median-combine the exposures of each sky pass (about every 6 months)";
   if (!ex.frames[ex.current].cut) { const first = ex.frames.findIndex((f) => f.cut); if (first >= 0) go(first); }
+  if (ex.wantStack && !$("stackBtn").disabled) { ex.wantStack = false; setStacked(true); }
   if (!ex.frames.some((f) => f.cut)) {
     exLoading("");
     $("noObsTitle").textContent = "Could not load the observations";
@@ -604,8 +609,9 @@ function renderInfo() {
   const c = ex.target; if (!c) return;
   let s = `${ex.name} · ${fmtRA(c.ra)} ${fmtDec(c.dec)} · ${bandShort(ex.band)} (${BANDS[ex.band]}) · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
   if (ex.frames.length) {
-    s += ` · ${ex.listTotal} observations` + (ex.listTotal > ex.frames.length ? ` (showing ${ex.frames.length})` : "");
-    s += ex.finished ? (ex.failed ? ` · ${ex.failed} not loaded` : "") : ` · loading ${ex.done}/${ex.frames.length}`;
+    s += ` · ${ex.listTotal} observations` + (ex.listTotal > ex.exposures.length ? ` (showing ${ex.exposures.length})` : "");
+    s += ex.finished ? (ex.failed ? ` · ${ex.failed} not loaded` : "") : ` · loading ${ex.done}/${ex.exposures.length}`;
+    if (ex.stacked) s += ` · stacked into ${ex.frames.length} sky passes`;
   }
   $("regionInfo").textContent = s + " · data: NASA/IPAC IRSA · not an official NASA site";
 }
@@ -617,7 +623,9 @@ function buildStrip() {
   ex.frames.forEach((f, i) => {
     const d = shortDate(f.date), b = document.createElement("button");
     b.type = "button"; b.className = "fr";
-    b.innerHTML = `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
+    b.innerHTML = f.pass
+      ? `<span class="d">${esc(f.pass.label)}</span><span class="t">${f.pass.n} exp · ${esc(f.pass.span)}<span class="dotf" hidden></span></span>`
+      : `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
     b.addEventListener("click", () => go(i));
     strip.appendChild(b);
     updateChip(i);
@@ -631,7 +639,8 @@ function updateChip(i) {
   b.classList.toggle("bad", f.failed);
   b.setAttribute("aria-current", String(i === ex.current));
   b.querySelector(".dotf").hidden = !q;
-  b.setAttribute("aria-label", `${d.day} ${d.year}, ${d.time} UTC${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
+  b.setAttribute("aria-label", f.pass ? `Sky pass ${i + 1}: ${f.pass.range}, median of ${f.pass.n} exposures`
+    : `${d.day} ${d.year}, ${d.time} UTC${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
   b.title = q ? `Quality flags at the target: ${q}` : "";
 }
 function updateStrip() {
@@ -658,11 +667,17 @@ function shownIndex() {
 function showFrame() {
   const k = ex.current, f = ex.frames[k]; if (!f) return;
   const di = shownIndex(), shown = ex.frames[di], d = shortDate(shown.date);
-  $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
-  $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
-    `${bandShort(ex.band)} · 6.15″/px`;
-  $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
-    `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
+  if (shown.pass) {
+    $("shownDate").textContent = `Sky pass ${di + 1} of ${ex.frames.length} · ${shown.pass.range}`;
+    $("chanShort").textContent = `Median of ${shown.pass.n} exposures · λ ${shown.pass.wl} µm · ${bandShort(ex.band)}`;
+    $("exCredit").textContent = `Stack of ${shown.pass.n} SPHEREx exposures from IRSA · switch STACK off to see and link each one`;
+  } else {
+    $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
+    $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
+      `${bandShort(ex.band)} · 6.15″/px`;
+    $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
+      `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
+  }
 
   const ri = refIndex(), prev = ex.frames[ri];
   if (ex.diff && f.cut && ri >= 0) {
@@ -687,7 +702,7 @@ function renderMode() {
   const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
   lbl.hidden = !(ex.blink || ex.diff);
   if (!f) return;
-  const day = (x) => shortDate(x.date).day;
+  const day = (x) => (x.pass ? x.pass.label.toUpperCase() : shortDate(x.date).day);
   const skipped = ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
   if (ex.blink) {
     lbl.textContent = !f.cut ? "BLINK · THIS OBSERVATION IS NOT LOADED"
@@ -697,7 +712,7 @@ function renderMode() {
     if (!f.cut) lbl.textContent = "DIFFERENCE · THIS OBSERVATION IS NOT LOADED";
     else if (!p) lbl.textContent = "DIFFERENCE UNAVAILABLE · NO EARLIER LOADED OBSERVATION · SHOWING THIS ONE";
     else {
-      const wl = (x) => (x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
+      const wl = (x) => (x.pass ? x.pass.wl : x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
       lbl.textContent = `DIFFERENCE · ${day(f)} − ${day(p)} · λ ${wl(f)} vs ${wl(p)} µm${skipped}`;
     }
   }
@@ -731,13 +746,13 @@ function renderPop() {
   const rows = [
     prow("RA", esc(fmtRA(c.ra))),
     prow("Dec", esc(fmtDec(c.dec))),
-    prow(isDiff ? "Change vs previous" : "Brightness",
+    prow(isDiff ? "Change vs previous" : f.pass ? `Brightness (median of ${f.pass.n})` : "Brightness",
       val === undefined ? "—" : val === null ? "no data" : `${isDiff && val > 0 ? "+" : ""}${val.toFixed(3)} MJy/sr`, val === null),
-    prow("Observed", esc(`${d.day} ${d.year} · ${d.time} UTC`)),
-    prow("Wavelength", f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
+    prow("Observed", esc(f.pass ? f.pass.range : `${d.day} ${d.year} · ${d.time} UTC`)),
+    prow("Wavelength", f.pass ? `${f.pass.wl} µm` : f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
     prow("Band", esc(`${bandShort(ex.band)} · ${BANDS[ex.band]}`)),
     prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
-    prow("Source file", `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
+    prow("Source file", f.pass ? `${f.pass.n} files (see each exposure)` : `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
   ];
   $("popRows").innerHTML = rows.join("");
   $("popNoData").hidden = val !== null;
@@ -796,9 +811,11 @@ function renderBar() {
   $("frameNo").textContent = n ? `${shownIndex() + 1}/${n}` : "0/0";
   const f = ex.frames[shownIndex()], q = f && f.cut ? f.cut.quality || [] : [];
   const chip = $("flagChip");
-  chip.textContent = !f || !f.cut ? (f && f.failed ? "NOT LOADED" : "—") : q.length ? q.map((x) => x.name).join(" · ") : "QUALITY OK";
+  chip.textContent = f && f.pass ? `MEDIAN · ${f.pass.n} EXPOSURES` : !f || !f.cut ? (f && f.failed ? "NOT LOADED" : "—")
+    : q.length ? q.map((x) => x.name).join(" · ") : "QUALITY OK";
   chip.classList.toggle("bad", q.length > 0 || !!(f && f.failed));
-  chip.title = q.length ? "SPHEREx quality flags within 1 pixel of the target: " + q.map((x) => `${x.name} (${x.desc})`).join("; ")
+  $("stackBtn").setAttribute("aria-pressed", String(ex.stacked));
+  chip.title = f && f.pass ? "Pixel-by-pixel median of every loaded exposure in this sky pass" : q.length ? "SPHEREx quality flags within 1 pixel of the target: " + q.map((x) => `${x.name} (${x.desc})`).join("; ")
                         : "No SPHEREx quality flags within 1 pixel of the target";
   $("prev").setAttribute("aria-disabled", String(!n || nextLoadable(k, -1) < 0));
   $("next").setAttribute("aria-disabled", String(!n || nextLoadable(k, 1) < 0));
@@ -828,6 +845,292 @@ $("blinkBtn").addEventListener("click", () => {
 });
 $("diffBtn").addEventListener("click", () => { stopBlink(); ex.diff = !ex.diff; showFrame(); });
 
+// ---- STACK: one median image per sky pass
+// SPHEREx scans each part of the sky in a burst of exposures about every six months. Exposures
+// more than PASS_GAP_DAYS apart start a new pass; near the ecliptic poles, where coverage is almost
+// continuous, a pass is also cut after PASS_MAX_DAYS. The stack is the per-pixel median of the
+// loaded exposures (robust to cosmic rays and other one-off artefacts); the frames are already
+// on one north-up grid, so pixels line up. Each exposure sees a slightly different wavelength
+// within the detector, so a stack is a broadband image of the whole detector range.
+const PASS_GAP_DAYS = 60, PASS_MAX_DAYS = 120;
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+function groupPasses(mjds) {          // -> array of [start index, end index] into the sorted mjds
+  const out = [];
+  mjds.forEach((m, i) => {
+    const cur = out[out.length - 1];
+    if (!cur || m - mjds[i - 1] > PASS_GAP_DAYS || m - mjds[cur[0]] > PASS_MAX_DAYS) out.push([i, i]); else cur[1] = i;
+  });
+  return out;
+}
+function medianStack(members) {
+  const n = members[0].cut.data.length, out = new Array(n), buf = new Float64Array(members.length);
+  for (let p = 0; p < n; p++) {
+    let k = 0;
+    for (const m of members) { const v = m.cut.data[p]; if (v !== null) buf[k++] = v; }
+    if (!k) { out[p] = null; continue; }
+    const s = buf.subarray(0, k).sort();
+    out[p] = k % 2 ? s[(k - 1) / 2] : (s[k / 2 - 1] + s[k / 2]) / 2;
+  }
+  return out;
+}
+function buildPasses() {
+  const loaded = ex.exposures.filter((f) => f.cut);
+  return groupPasses(loaded.map((f) => f.mjd)).map(([a, b]) => {
+    const members = loaded.slice(a, b + 1), first = members[0], last = members[members.length - 1];
+    const da = shortDate(first.date), db = shortDate(last.date);
+    const wls = members.map((m) => m.cut.wavelength_um).filter((x) => x);
+    const mon = MONTHS[+first.date.slice(5, 7) - 1];
+    return {
+      date: first.date, mjd: first.mjd, failed: false, members,
+      cut: { ...first.cut, data: medianStack(members), wavelength_um: null, quality: [] },
+      pass: {
+        n: members.length, label: `${mon} ${da.year}`,
+        span: `${Math.max(1, Math.round(last.mjd - first.mjd))} d`,
+        range: da.year === db.year ? `${da.day} – ${db.day} ${db.year}` : `${da.day} ${da.year} – ${db.day} ${db.year}`,
+        wl: wls.length ? `${Math.min(...wls).toFixed(2)}–${Math.max(...wls).toFixed(2)}` : "?",
+      },
+    };
+  });
+}
+function setStacked(on) {
+  if (on === ex.stacked || (on && $("stackBtn").disabled)) return;
+  stop(); stopBlink();
+  const cur = ex.frames[ex.current];
+  if (on) {
+    ex.frames = buildPasses();
+    const i = ex.frames.findIndex((p) => p.members.includes(cur));
+    ex.current = i >= 0 ? i : 0;
+  } else {
+    ex.frames = ex.exposures;
+    const i = cur && cur.members ? ex.exposures.indexOf(cur.members[0]) : -1;
+    ex.current = i >= 0 ? i : 0;
+  }
+  ex.stacked = on;
+  buildStrip(); renderInfo(); showFrame(); writeHash(ex.target);
+  toast(on ? `Stacked into ${ex.frames.length} sky passes` : "Showing each exposure");
+}
+$("stackBtn").addEventListener("click", () => setStacked(!ex.stacked));
+
+// ---- SPECTRUM: photometry of one position in every SPHEREx image, all six detectors
+// The server measures a 3-pixel-radius aperture (background-subtracted, converted to µJy with each
+// detector's solid-angle pixel map), following IRSA's SPHEREx Source Discovery Tool tutorial.
+// Points are coloured by sky pass (dark = earliest, light = latest); hollow points have bad pixels
+// in the aperture (SPHEREx Explanatory Supplement flags) and are less reliable.
+const SPEC_RAMP = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"];   // validated ordinal ramp (dark surface)
+const DETECTOR_RANGES = [[0.75, 1.09], [1.10, 1.62], [1.63, 2.41], [2.42, 3.82], [3.83, 4.41], [4.42, 5.00]];
+const sp = { id: 0, ctrl: null, pos: null, what: "", pts: [], total: 0, found: 0, failed: 0, passOf: null, passes: [],
+             log: false, table: false, raf: 0 };
+function passColor(k, n) {
+  if (n <= 1) return SPEC_RAMP[3];
+  const t = (k / (n - 1)) * (SPEC_RAMP.length - 1), i = Math.min(SPEC_RAMP.length - 2, Math.floor(t)), f = t - i;
+  const a = SPEC_RAMP[i], b = SPEC_RAMP[i + 1], ch = (h, o) => parseInt(h.slice(o, o + 2), 16);
+  return "#" + [1, 3, 5].map((o) => Math.round(ch(a, o) + (ch(b, o) - ch(a, o)) * f).toString(16).padStart(2, "0")).join("");
+}
+const fmtFlux = (v) => {
+  const a = Math.abs(v);
+  return a >= 1e6 ? `${+(v / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M` : a >= 1e3 ? `${+(v / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k` : `${+v.toFixed(a >= 10 ? 0 : 1)}`;
+};
+function niceTicks(lo, hi, n) {
+  const step0 = (hi - lo) / Math.max(1, n), mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1, 2, 5, 10].map((m) => m * mag).find((x) => x >= step0) || 10 * mag;
+  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toPrecision(12));
+  return out;
+}
+
+async function openSpectrum(pos, what) {
+  closeSpectrum();
+  const id = ++sp.id;
+  Object.assign(sp, { pos, what, pts: [], total: 0, found: 0, failed: 0, offScale: 0, passOf: null, passes: [], ctrl: new AbortController() });
+  $("spec").hidden = false; $("specBtn").setAttribute("aria-pressed", "true");
+  $("specWhat").textContent = what;
+  $("specPos").textContent = `${fmtRA(pos.ra)} ${fmtDec(pos.dec)}`;
+  $("specStatus").textContent = "Finding every SPHEREx image of this position (all six detectors)…";
+  drawSpectrum();
+  try {
+    const r = await fetch(`api/spectrum?ra=${pos.ra}&dec=${pos.dec}`, { signal: sp.ctrl.signal });
+    if (!r.ok || !r.body) { let m = r.statusText; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
+    const reader = r.body.getReader(), dec = new TextDecoder();
+    let buf = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (id !== sp.id) { reader.cancel(); return; }
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      let k;
+      while ((k = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, k); buf = buf.slice(k + 1);
+        if (line) onSpecLine(JSON.parse(line));
+      }
+    }
+    if (id === sp.id) { sp.done = true; specStatus(); scheduleDraw(); }
+  } catch (e) {
+    if (id === sp.id && e.name !== "AbortError") $("specStatus").textContent = "Could not measure the spectrum: " + e.message;
+  }
+}
+function onSpecLine(m) {
+  if ("total" in m) {
+    sp.total = m.total; sp.found = m.found;
+    // Sky passes from every image's date, so colours are fixed before the points arrive.
+    const order = m.mjds.map((x, i) => [x, i]).sort((a, b) => a[0] - b[0]);
+    const groups = groupPasses(order.map((x) => x[0]));
+    sp.passOf = new Array(m.mjds.length);
+    sp.passes = groups.map(([a, b], k) => {
+      for (let j = a; j <= b; j++) sp.passOf[order[j][1]] = k;
+      return { a: order[a][0], b: order[b][0], n: b - a + 1 };
+    });
+  } else if (m.error || m.flux_ujy === null || m.flux_ujy === undefined || !m.wavelength_um) {
+    sp.failed++;
+  } else {
+    sp.pts.push({ ...m, pass: sp.passOf ? sp.passOf[m.i] : 0 });
+  }
+  specStatus(); scheduleDraw();
+}
+function specStatus() {
+  const got = sp.pts.length, n = sp.total;
+  const sampled = sp.found > n ? ` (spread evenly over ${sp.found})` : "";
+  const prog = sp.done ? `Measured in ${got} of ${n} images${sampled}` : `Measuring… ${got + sp.failed} of ${n} images${sampled}`;
+  const fail = sp.failed ? ` · ${sp.failed} not measured (image edge or IRSA busy)` : "";
+  const offs = sp.offScale ? ` · ${sp.offScale} off scale, drawn at the edge (try LOG)` : "";
+  $("specStatus").textContent = `${prog}${fail}${offs} · 3-px aperture, µJy, not aperture-corrected`;
+}
+function scheduleDraw() { if (!sp.raf) sp.raf = requestAnimationFrame(() => { sp.raf = 0; drawSpectrum(); }); }
+function closeSpectrum() {
+  sp.id++; if (sp.ctrl) sp.ctrl.abort(); sp.ctrl = null; sp.done = false;
+  $("spec").hidden = true; $("specTip").hidden = true; $("specBtn").setAttribute("aria-pressed", "false");
+}
+
+function drawSpectrum() {
+  const svg = $("specSvg"), box = $("specPlot"), W = box.clientWidth, H = box.clientHeight;
+  $("specPlot").hidden = sp.table; $("specTableBox").hidden = !sp.table;
+  $("specLog").setAttribute("aria-pressed", String(sp.log)); $("specTable").setAttribute("aria-pressed", String(sp.table));
+  // legend
+  const leg = sp.passes.map((p, k) => {
+    const a = shortDate(Time2Date(p.a)), b = shortDate(Time2Date(p.b));
+    return `<span title="${esc(`${a.day} ${a.year} – ${b.day} ${b.year}, ${p.n} images`)}"><i style="background:${passColor(k, sp.passes.length)}"></i>Pass ${k + 1} · ${esc(MONTHS[+Time2Date(p.a).slice(5, 7) - 1])} ${esc(a.year)}</span>`;
+  });
+  if (sp.pts.some((p) => p.n_bad > 0)) leg.push(`<span><i style="border:1.5px solid #9ec5f4;background:transparent"></i>bad pixels in aperture</span>`);
+  $("specLegend").innerHTML = leg.join("");
+  if (sp.table) { drawSpecTable(); return; }
+  if (!W || !H) return;
+  const M = { l: 52, r: 10, t: 18, b: 30 }, pw = W - M.l - M.r, ph = H - M.t - M.b;
+  const xs = (x) => M.l + ((x - 0.7) / (5.1 - 0.7)) * pw;
+  const pts = sp.pts;
+  // y range from reliable points when there are enough, else all; points beyond it are clipped.
+  const good = pts.filter((p) => p.n_bad === 0);
+  const base = good.length >= 5 ? good : pts;
+  let lo, hi;
+  if (sp.log) {
+    const pos = base.filter((p) => p.flux_ujy > 0).map((p) => p.flux_ujy);
+    lo = pos.length ? Math.min(...pos) / 1.6 : 1; hi = pos.length ? Math.max(...pos) * 1.6 : 10;
+  } else {
+    const v = base.map((p) => p.flux_ujy);
+    lo = v.length ? Math.min(0, ...base.map((p) => p.flux_ujy - p.err_ujy)) : 0;
+    hi = v.length ? Math.max(...base.map((p) => p.flux_ujy + p.err_ujy)) * 1.08 : 1;
+    if (hi <= lo) hi = lo + 1;
+  }
+  const ys = sp.log ? (y) => M.t + ph - ((Math.log10(Math.max(y, lo)) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo))) * ph
+                    : (y) => M.t + ph - ((y - lo) / (hi - lo)) * ph;
+  const clampY = (y) => Math.max(M.t, Math.min(M.t + ph, y));
+  const g = [];
+  // detector bands (alternating shade; the band shown in the viewer is outlined)
+  DETECTOR_RANGES.forEach(([a, b], i) => {
+    const on = ex.band === `SPHEREx-D${i + 1}`;
+    g.push(`<rect x="${xs(a)}" y="${M.t}" width="${xs(b) - xs(a)}" height="${ph}" fill="${i % 2 ? "rgba(255,255,255,0.035)" : "rgba(255,255,255,0.07)"}"${on ? ' stroke="rgba(255,255,255,0.35)" stroke-dasharray="3 3"' : ""}/>`);
+    g.push(`<text x="${(xs(a) + xs(b)) / 2}" y="${M.t - 5}" fill="${on ? "#ffffff" : "#a8a8a8"}" font-size="10" text-anchor="middle" font-family="DM Mono, monospace">D${i + 1}</text>`);
+  });
+  // axes, grid, ticks
+  const yt = sp.log ? (() => { const out = []; for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) [1, 3].forEach((m) => { const v = m * 10 ** e; if (v >= lo && v <= hi) out.push(v); }); return out; })()
+                    : niceTicks(lo, hi, 4);
+  yt.forEach((v) => {
+    g.push(`<line x1="${M.l}" x2="${M.l + pw}" y1="${ys(v)}" y2="${ys(v)}" stroke="rgba(255,255,255,0.12)"/>`);
+    g.push(`<text x="${M.l - 6}" y="${ys(v) + 3}" fill="#c8c8c8" font-size="10" text-anchor="end" font-family="DM Mono, monospace">${fmtFlux(v)}</text>`);
+  });
+  if (!sp.log && lo < 0) g.push(`<line x1="${M.l}" x2="${M.l + pw}" y1="${ys(0)}" y2="${ys(0)}" stroke="rgba(255,255,255,0.35)"/>`);
+  [1, 2, 3, 4, 5].forEach((v) => g.push(`<text x="${xs(v)}" y="${M.t + ph + 14}" fill="#c8c8c8" font-size="10" text-anchor="middle" font-family="DM Mono, monospace">${v}</text>`));
+  g.push(`<text x="${M.l + pw}" y="${M.t + ph + 26}" fill="#a8a8a8" font-size="10" text-anchor="end" font-family="Public Sans, sans-serif">Wavelength (µm)</text>`);
+  g.push(`<text x="12" y="${M.t + ph / 2}" fill="#a8a8a8" font-size="10" text-anchor="middle" font-family="Public Sans, sans-serif" transform="rotate(-90 12 ${M.t + ph / 2})">Flux density (µJy)</text>`);
+  // error bars, then markers (earliest pass first, so the latest sits on top)
+  const order = pts.slice().sort((a, b) => a.pass - b.pass || a.n_bad - b.n_bad);
+  sp.screen = [];
+  let off = 0;
+  for (const p of order) {
+    const col = passColor(p.pass, sp.passes.length), x = xs(p.wavelength_um), yRaw = ys(p.flux_ujy), y = clampY(yRaw);
+    if (yRaw !== y) off++;
+    const y1 = clampY(ys(p.flux_ujy - p.err_ujy)), y2 = clampY(ys(p.flux_ujy + p.err_ujy));
+    if (Math.abs(y1 - y2) > 1) g.push(`<line x1="${x}" x2="${x}" y1="${y1}" y2="${y2}" stroke="${col}" stroke-opacity="0.6"/>`);
+    g.push(p.n_bad > 0
+      ? `<circle cx="${x}" cy="${y}" r="3.5" fill="#080808" stroke="${col}" stroke-width="1.5"/>`
+      : `<circle cx="${x}" cy="${y}" r="4" fill="${col}" stroke="#080808" stroke-width="1.5"/>`);
+    sp.screen.push({ x, y, p });
+  }
+  if (!pts.length) g.push(`<text x="${M.l + pw / 2}" y="${M.t + ph / 2}" fill="#a8a8a8" font-size="12" text-anchor="middle" font-family="Public Sans, sans-serif">${sp.done ? "No measurements" : "Waiting for the first measurements…"}</text>`);
+  sp.offScale = off; specStatus();
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = g.join("");
+}
+const Time2Date = (mjd) => new Date((mjd - 40587) * 86400000).toISOString().slice(0, 19).replace("T", " ");
+
+function specRowText(p) {
+  return { wl: p.wavelength_um.toFixed(3), bw: (p.bandwidth_um || 0).toFixed(3), f: p.flux_ujy.toFixed(1), e: p.err_ujy.toFixed(1) };
+}
+function drawSpecTable() {
+  const rows = sp.pts.slice().sort((a, b) => a.wavelength_um - b.wavelength_um).map((p) => {
+    const t = specRowText(p);
+    return `<tr><td>${t.wl}</td><td>${t.f}</td><td>${t.e}</td><td>${bandShort(p.band)}</td><td>${p.pass + 1}</td><td>${esc(p.date.slice(0, 16))}</td><td>${esc(p.flags.join(" ") || "—")}</td></tr>`;
+  });
+  $("specTableBox").innerHTML = `<table><thead><tr><th>λ (µm)</th><th>Flux (µJy)</th><th>± (µJy)</th><th>Det</th><th>Pass</th><th>UTC</th><th>Flags in aperture</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
+}
+$("specCsv").addEventListener("click", () => {
+  const head = "wavelength_um,bandwidth_um,flux_ujy,err_ujy,detector,pass,utc,obs_id,n_bad_pixels,flags,url";
+  const lines = sp.pts.slice().sort((a, b) => a.wavelength_um - b.wavelength_um).map((p) => {
+    const t = specRowText(p);
+    return [t.wl, t.bw, t.f, t.e, bandShort(p.band), p.pass + 1, p.date, p.obs_id, p.n_bad, p.flags.join(" "), p.url].join(",");
+  });
+  const meta = `# SPHEREx aperture photometry at RA ${sp.pos.ra.toFixed(6)} Dec ${sp.pos.dec.toFixed(6)} (3-px radius, background-subtracted, not aperture-corrected). Data: NASA/IPAC IRSA.`;
+  const url = URL.createObjectURL(new Blob([meta + "\n" + head + "\n" + lines.join("\n") + "\n"], { type: "text/csv" }));
+  $("specCsv").href = url;
+  $("specCsv").download = `spherex_spectrum_${sp.pos.ra.toFixed(4)}_${sp.pos.dec.toFixed(4)}.csv`;
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+});
+$("specLog").addEventListener("click", () => { sp.log = !sp.log; drawSpectrum(); });
+$("specTable").addEventListener("click", () => { sp.table = !sp.table; drawSpectrum(); });
+$("specClose").addEventListener("click", closeSpectrum);
+$("specBtn").addEventListener("click", () => {
+  if (!$("spec").hidden) { closeSpectrum(); return; }
+  if (ex.target) openSpectrum(ex.target, ex.name === "Custom field" ? "target" : ex.name);
+});
+$("popSpec").addEventListener("click", () => {
+  if (!ex.pick || !exView.field) return;
+  openSpectrum(pixToSky(exView.field, ex.pick.ix, ex.pick.iy), "clicked point");
+});
+new ResizeObserver(() => { if (!$("spec").hidden) scheduleDraw(); }).observe($("specPlot"));
+["pointerdown", "pointerup", "wheel"].forEach((t) => $("spec").addEventListener(t, (e) => e.stopPropagation()));
+// hover read-out; click a point in the band on screen to show that exposure
+function nearestSpecPoint(e) {
+  const r = $("specSvg").getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
+  let best = null, bd = 12;
+  for (const s of sp.screen || []) { const d = Math.hypot(s.x - x, s.y - y); if (d < bd) { bd = d; best = s; } }
+  return best;
+}
+$("specSvg").addEventListener("pointermove", (e) => {
+  const tip = $("specTip"), s = nearestSpecPoint(e);
+  if (!s) { tip.hidden = true; return; }
+  const p = s.p, t = specRowText(p);
+  const canJump = !ex.stacked && p.band === ex.band && ex.frames.some((f) => f.obs_id === p.obs_id && f.cut);
+  tip.textContent = `${p.date.slice(0, 16)} UTC · ${bandShort(p.band)} · pass ${p.pass + 1}\nλ ${t.wl} µm (±${(p.bandwidth_um / 2 || 0).toFixed(3)})\n${t.f} ± ${t.e} µJy` +
+    (p.flags.length ? `\nflags: ${p.flags.join(", ")}` : "") + (canJump ? "\nclick: show this image" : "");
+  tip.hidden = false;
+  const W = $("specPlot").clientWidth;
+  tip.style.left = (s.x > W * 0.6 ? s.x - tip.offsetWidth - 10 : s.x + 10) + "px";
+  tip.style.top = Math.max(0, s.y - 20) + "px";
+});
+$("specSvg").addEventListener("pointerleave", () => { $("specTip").hidden = true; });
+$("specSvg").addEventListener("click", (e) => {
+  const s = nearestSpecPoint(e); if (!s || ex.stacked || s.p.band !== ex.band) return;
+  const i = ex.frames.findIndex((f) => f.obs_id === s.p.obs_id && f.cut);
+  if (i >= 0) { stop(); go(i); }
+});
+
 // ---- full screen
 function setFs(on) {
   $("viewwrap").classList.toggle("fs", on);
@@ -838,7 +1141,7 @@ $("fsBtn").addEventListener("click", () => setFs(!$("viewwrap").classList.contai
 
 document.addEventListener("keydown", (e) => {
   if ($("explore").hidden) return;
-  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); else setFs(false); return; }
+  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); else if (!$("spec").hidden) closeSpectrum(); else setFs(false); return; }
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (e.key === " " && e.target.tagName === "BUTTON") return;
   if (e.key === "ArrowLeft") { stop(); stepFrame(-1); }
@@ -848,7 +1151,7 @@ document.addEventListener("keydown", (e) => {
 
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
-  stop(); stopBlink(); setFs(false); ex.searchId++;
+  stop(); stopBlink(); setFs(false); closeSpectrum(); ex.searchId++;
   history.replaceState(null, "", location.pathname + location.search);
   $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;
@@ -871,6 +1174,7 @@ function writeHash(c) {
   p.set("ra", +c.ra.toFixed(6)); p.set("dec", +c.dec.toFixed(6));
   p.set("size", heightArcsec() || 240); p.set("band", $("band").value);
   p.set("speed", SPEED_LIST[ex.speedIdx]);
+  if (ex.stacked) p.set("stack", 1);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
@@ -886,6 +1190,7 @@ function readHash() {
     let best = 2; SPEED_LIST.forEach((x, i) => { if (Math.abs(x - s) < Math.abs(SPEED_LIST[best] - s)) best = i; });
     ex.speedIdx = best;
   }
+  ex.wantStack = p.get("stack") === "1";
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }
