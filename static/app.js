@@ -576,7 +576,8 @@ async function openExplore(c) {
     renderInfo(); updateChip(i);
     if (!exView.hasImage && frame && i === ex.current) exLoading("");
     else if (!exView.hasImage) exLoading(`Retrieving SPHEREx observations… ${ex.done} of ${ex.frames.length}`);
-    if (i === ex.current || (ex.diff && i === ex.current - 1)) showFrame();
+    // An earlier frame arriving can change what BLINK / DIFF compare against.
+    if (i === ex.current || ((ex.diff || ex.blink) && i < ex.current)) showFrame();
   };
   for (let pass = 0; pass < 2 && id === ex.searchId; pass++) {
     const batch = pass === 0 ? ex.frames.slice() : ex.frames.filter((f) => f.failed);
@@ -645,7 +646,15 @@ function updateStrip() {
 }
 
 // ---- the picture: normal, blink, or difference
-function shownIndex() { return ex.blink && ex.blinkAlt && ex.current > 0 ? ex.current - 1 : ex.current; }
+// BLINK and DIFF compare with the nearest earlier observation that loaded (-1 if none).
+function refIndex() {
+  for (let i = ex.current - 1; i >= 0; i--) if (ex.frames[i].cut) return i;
+  return -1;
+}
+function shownIndex() {
+  const r = refIndex();
+  return ex.blink && ex.blinkAlt && r >= 0 ? r : ex.current;
+}
 function showFrame() {
   const k = ex.current, f = ex.frames[k]; if (!f) return;
   const di = shownIndex(), shown = ex.frames[di], d = shortDate(shown.date);
@@ -655,8 +664,8 @@ function showFrame() {
   $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
     `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
 
-  const prev = ex.frames[k - 1];
-  if (ex.diff && k > 0 && f.cut && prev && prev.cut) {
+  const ri = refIndex(), prev = ex.frames[ri];
+  if (ex.diff && f.cut && ri >= 0) {
     // Difference image: this observation minus the previous one, on a symmetric linear scale.
     const data = f.cut.data.map((v, i) => (v === null || prev.cut.data[i] === null ? null : v - prev.cut.data[i]));
     const mags = data.filter((v) => v !== null).map(Math.abs).sort((a, b) => a - b);
@@ -670,23 +679,26 @@ function showFrame() {
     exView.clearImage(); ex.diffData = null;
     if (!$("explore").hidden && ex.frames.length) exLoading(shown.failed ? "" : "Retrieving this observation…");
   }
-  if (shown.failed && !shown.cut) toast("This observation could not be loaded from IRSA");
   if (exView.hasImage) exLoading("");
   renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks();
 }
 
 function renderMode() {
-  const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], p = ex.frames[k - 1];
+  const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
   lbl.hidden = !(ex.blink || ex.diff);
   if (!f) return;
   const day = (x) => shortDate(x.date).day;
+  const skipped = ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
   if (ex.blink) {
-    lbl.textContent = p ? `BLINK · ${day(p)} ↔ ${day(f)} · NOW ${day(ex.frames[shownIndex()])}` : "BLINK · NEEDS A PREVIOUS OBSERVATION";
+    lbl.textContent = !f.cut ? "BLINK · THIS OBSERVATION IS NOT LOADED"
+      : p ? `BLINK · ${day(p)} ↔ ${day(f)} · NOW ${day(ex.frames[shownIndex()])}${skipped}`
+      : "BLINK · NO EARLIER LOADED OBSERVATION";
   } else if (ex.diff) {
-    if (!p) lbl.textContent = "DIFFERENCE · NEEDS A PREVIOUS OBSERVATION";
+    if (!f.cut) lbl.textContent = "DIFFERENCE · THIS OBSERVATION IS NOT LOADED";
+    else if (!p) lbl.textContent = "DIFFERENCE UNAVAILABLE · NO EARLIER LOADED OBSERVATION · SHOWING THIS ONE";
     else {
       const wl = (x) => (x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
-      lbl.textContent = `DIFFERENCE · ${day(f)} − ${day(p)} · λ ${wl(f)} vs ${wl(p)} µm`;
+      lbl.textContent = `DIFFERENCE · ${day(f)} − ${day(p)} · λ ${wl(f)} vs ${wl(p)} µm${skipped}`;
     }
   }
 }
@@ -755,6 +767,7 @@ function nextLoadable(from, dir) {
 function go(i) {
   if (!ex.frames.length) return;
   ex.current = Math.max(0, Math.min(ex.frames.length - 1, i));
+  if (ex.frames[ex.current].failed) toast("This observation could not be loaded from IRSA");
   showFrame();
   if (ex.playing) schedule();
 }

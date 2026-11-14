@@ -22,6 +22,7 @@ import re
 import threading
 import time
 import warnings
+from collections import OrderedDict
 from functools import lru_cache
 
 import numpy as np
@@ -75,13 +76,17 @@ def index():
     return send_from_directory(app.static_folder, "index.html")
 
 
-@lru_cache(maxsize=512)
+SIA_COLUMNS = ("energy_bandpassname", "dataproduct_subtype", "access_url", "obs_id", "obs_collection", "t_min")
+
+
+@lru_cache(maxsize=256)
 def sia_rows(ra, dec):
     """All SPHEREx images (every band) covering a position, from IRSA's SIA service. Cached."""
     params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "20000")]
     params += [("COLLECTION", c) for c in COLLECTIONS]
     text = irsa_get(SIA_URL, params=params, timeout=120).text
-    return tuple(csv.DictReader(io.StringIO(text)))
+    # Keep only the columns used below, so cached searches stay small.
+    return tuple({k: row.get(k) for k in SIA_COLUMNS} for row in csv.DictReader(io.StringIO(text)))
 
 
 @app.get("/api/frames")
@@ -266,7 +271,48 @@ def target_flags(flags_hdu, xc, yc):
     return out
 
 
-@lru_cache(maxsize=4000)
+class FrameCache:
+    """Least-recently-used cache of frames as JSON text, limited by total size in bytes.
+
+    Frames are kept as JSON text (about a quarter of the memory of the Python objects) and the
+    oldest are dropped once the total passes the limit (ANVIS_CACHE_MB, default 300 MB).
+    """
+
+    def __init__(self, max_bytes):
+        self.max_bytes, self.total = max_bytes, 0
+        self.items = OrderedDict()
+        self.lock = threading.Lock()
+
+    def get(self, key):
+        with self.lock:
+            text = self.items.get(key)
+            if text is not None:
+                self.items.move_to_end(key)
+            return text
+
+    def put(self, key, text):
+        with self.lock:
+            if key in self.items:
+                self.total -= len(self.items.pop(key))
+            self.items[key] = text
+            self.total += len(text)
+            while self.total > self.max_bytes and len(self.items) > 1:
+                self.total -= len(self.items.popitem(last=False)[1])
+
+
+_frames = FrameCache(int(float(os.environ.get("ANVIS_CACHE_MB", 300)) * 1e6))
+
+
+def frame_json(url, ra, dec, size_arcsec, width_arcsec):
+    """make_frame() as JSON text, through the size-limited cache."""
+    key = (url, ra, dec, size_arcsec, width_arcsec)
+    text = _frames.get(key)
+    if text is None:
+        text = json.dumps(make_frame(url, ra, dec, size_arcsec, width_arcsec), separators=(",", ":"))
+        _frames.put(key, text)
+    return text
+
+
 def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
     """One frame: height size_arcsec, width width_arcsec (default: square)."""
     width_arcsec = width_arcsec or size_arcsec
@@ -326,11 +372,11 @@ def cutout():
     if not 30 <= width <= MAX_WIDTH_ARCSEC:
         return bad(f"width must be between 30 and {MAX_WIDTH_ARCSEC} arcsec")
     try:
-        frame = make_frame(url, round(ra, 6), round(dec, 6), round(size), round(width))
+        text = frame_json(url, round(ra, 6), round(dec, 6), round(size), round(width))
     except Exception as e:
         app.logger.warning("cutout failed for %s: %s", url, e)
         return bad(str(e), 502)
-    resp = jsonify(frame)
+    resp = Response(text, mimetype="application/json")
     resp.headers["Cache-Control"] = "public, max-age=86400"
     return resp
 
@@ -362,16 +408,16 @@ def cutouts():
 
     def generate():
         # Submitted in list order (time order), so early frames tend to arrive first.
-        futures = {_pool.submit(make_frame, url, *args): i for i, url in enumerate(urls)}
+        futures = {_pool.submit(frame_json, url, *args): i for i, url in enumerate(urls)}
         try:
             for fut in cf.as_completed(futures):
                 i = futures[fut]
                 try:
-                    line = {"i": i, "frame": fut.result()}
+                    line = '{"i":%d,"frame":%s}' % (i, fut.result())
                 except Exception as e:
                     app.logger.warning("cutout failed for %s: %s", urls[i], e)
-                    line = {"i": i, "error": str(e)}
-                yield json.dumps(line) + "\n"
+                    line = json.dumps({"i": i, "error": str(e)})
+                yield line + "\n"
         finally:  # the browser went away (new search, closed tab): drop work not yet started
             for fut in futures:
                 fut.cancel()
