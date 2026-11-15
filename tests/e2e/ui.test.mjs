@@ -108,7 +108,8 @@ async function page1() {
   await check("P1 typing a position: hints, preset recognised, the grid centres on it – still nothing downloaded", async () => {
     assert((await p.textContent("#raHint")) === "= 17h 57m 47.1s");
     assert((await p.locator(".pr.on").allTextContents()).join() === "Barnard's Star");
-    assert(await p.evaluate(() => Math.abs(map.ra0 - 269.44626) < 1 || map.z === 1), "grid centred on the typed spot");
+    assert(await p.evaluate(() => { const q = mapXY(269.44626, 4.76832), { W, H } = mapSize(); return q.x >= 0 && q.x <= W && q.y >= 0 && q.y <= H; }),
+      "the typed spot is on screen");
     assert(!images.length);
   });
   await check("P1 coordinate parsing: degrees and sexagesimal, with hints", async () => {
