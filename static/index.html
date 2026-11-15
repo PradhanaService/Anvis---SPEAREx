@@ -17,6 +17,7 @@
     <div class="brand">
       <svg width="22" height="22" viewBox="0 0 40 40" fill="none" stroke="#0b0b0b" stroke-width="2.2" aria-hidden="true"><circle cx="20" cy="20" r="17"></circle><ellipse cx="20" cy="20" rx="17" ry="6.5" transform="rotate(-20 20 20)"></ellipse><circle cx="20" cy="20" r="3.5" fill="#E03C31" stroke="none"></circle></svg>
       <span class="bname">ANVIS</span>
+      <button class="infobtn" type="button" data-help="helpPick" aria-haspopup="dialog" aria-label="What do these fields mean?" title="What do these fields mean?"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"></circle><rect x="7.2" y="7" width="1.6" height="5" fill="currentColor"></rect><circle cx="8" cy="4.6" r="1" fill="currentColor"></circle></svg></button>
       <span class="bsub">SPHEREX</span>
     </div>
 
@@ -92,7 +93,10 @@
 <!-- ======================= Page 2: explore every image of it over time ======================= -->
 <div id="explore" class="app ex" hidden>
   <div class="extop">
-    <a class="bk" href="#" id="back"><span class="bkcirc"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M15 9H4M8 4.5L3.5 9 8 13.5"></path></svg></span>Back</a>
+    <div class="extopl">
+      <a class="bk" href="#" id="back"><span class="bkcirc"><svg width="14" height="14" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><path d="M15 9H4M8 4.5L3.5 9 8 13.5"></path></svg></span>Back</a>
+      <button class="infobtn" type="button" data-help="helpExplore" aria-haspopup="dialog" aria-label="What do these controls mean?" title="What do these controls mean?"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" stroke-width="1.5"></circle><rect x="7.2" y="7" width="1.6" height="5" fill="currentColor"></rect><circle cx="8" cy="4.6" r="1" fill="currentColor"></circle></svg></button>
+    </div>
   </div>
 
   <div class="viewwrap" id="viewwrap">
@@ -211,6 +215,105 @@
 
   <div role="group" aria-label="Observation dates" class="strip" id="strip"></div>
 </div>
+
+
+<!-- ======================= Help screens (the i buttons) ======================= -->
+<dialog class="help" id="helpPick" aria-labelledby="helpPickTitle">
+  <div class="helphead">
+    <h2 id="helpPickTitle">What the fields on this page mean</h2>
+    <button class="helpx" type="button" data-close aria-label="Close this explanation"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+  </div>
+  <p class="helpintro">Anvis shows every picture the NASA SPHEREx space telescope has taken of one small patch of sky, in the order they were taken, so you can see what moves or changes. On this page you choose the patch of sky; then press Search.</p>
+  <div class="helpgrid">
+    <section>
+      <h3>Where to look</h3>
+      <dl>
+        <dt>Right Ascension (RA)</dt>
+        <dd>The east–west position on the sky, like longitude on Earth. Type it in degrees (0 to 360, for example 269.45) or in hours, minutes and seconds (for example 17 57 48.5).</dd>
+        <dt>Declination (Dec)</dt>
+        <dd>The north–south position on the sky, like latitude on Earth: from −90 (south pole of the sky) to +90 (north pole). Type it in degrees (for example 4.77) or in degrees, minutes and seconds (for example +04 46 06).</dd>
+        <dt>The picture on the right</dt>
+        <dd>A real SPHEREx picture around your position. Drag it to move around, scroll (or use + and −) to zoom, and click a spot to choose it: RA and Dec fill in for you. The dashed box shows the area the search will show you.</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>How much and which light</h3>
+      <dl>
+        <dt>Field height</dt>
+        <dd>How tall a piece of sky to show, in arcminutes (′). One arcminute is 1/60 of a degree; the full Moon is about 30′ wide. The width follows your screen. A bigger field shows more around your target but takes longer to load; the line under the slider estimates how many pictures and how much data that means.</dd>
+        <dt>Band (detector)</dt>
+        <dd>SPHEREx sees infrared light, invisible to our eyes, with six detectors. D1 sees the shortest wavelengths (0.75–1.09 micrometres, µm), D6 the longest (4.42–5.00 µm). Ordinary stars look best in the short bands; cold objects such as brown dwarfs glow mostly in D5 and D6.</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Go</h3>
+      <dl>
+        <dt>Search</dt>
+        <dd>Finds every SPHEREx picture of this patch of sky in the chosen band and opens the viewer. Pressing Enter in a field does the same.</dd>
+        <dt>Presets</dt>
+        <dd>Five interesting targets, ready to go: <b>WISE 0855</b> (the coldest known brown dwarf), <b>Barnard's Star</b> (the fastest-moving star in our sky), <b>Epsilon Indi B</b> (a pair of nearby brown dwarfs), <b>RW Aurigae</b> (a young star whose brightness changes) and <b>R Draconis</b> (an old pulsating star). A preset fills in the position, sets a 10′ field and band D3, and searches.</dd>
+        <dt>Releases</dt>
+        <dd>The SPHEREx data collections in use, from NASA's Infrared Science Archive (IRSA), named at the bottom of the picture (for example DR1 + QR3).</dd>
+      </dl>
+    </section>
+  </div>
+</dialog>
+
+<dialog class="help" id="helpExplore" aria-labelledby="helpExploreTitle">
+  <div class="helphead">
+    <h2 id="helpExploreTitle">What the controls on this page mean</h2>
+    <button class="helpx" type="button" data-close aria-label="Close this explanation"><svg width="13" height="13" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+  </div>
+  <p class="helpintro">Every SPHEREx picture of your patch of sky, oldest first, all turned the same way (north up, east left). Flip through them like a cartoon: anything that moves or changes brightness between dates stands out.</p>
+  <div class="helpgrid">
+    <section>
+      <h3>View – what each picture is</h3>
+      <dl>
+        <dt>Stacks</dt>
+        <dd>SPHEREx looks at each part of the sky for a few weeks about every six months (a "survey visit"). Stacks averages all pictures from one visit into one cleaner picture. Best for seeing faint things and slow motion.</dd>
+        <dt>Frames</dt>
+        <dd>Every single picture on its own, with its exact date and time. Noisier, but shows each exposure.</dd>
+        <dt>Lock</dt>
+        <dd>Uses the same brightness scale for every picture, so a star that really gets brighter or fainter also looks brighter or fainter. Turned off, each picture gets its own best contrast.</dd>
+      </dl>
+      <h3>Playback</h3>
+      <dl>
+        <dt>Prev, Play, Pause, Next</dt>
+        <dd>Step through the pictures or play them like a film; "3/5" means picture 3 of 5. Speed sets how fast Play goes. Keyboard: ← and → step, Space plays or pauses.</dd>
+        <dt>Date strip (bottom)</dt>
+        <dd>One button per picture or survey visit; click one to show it. A red dot means a quality warning at your target.</dd>
+      </dl>
+    </section>
+    <section>
+      <h3>Mode – how to compare</h3>
+      <dl>
+        <dt>Normal</dt>
+        <dd>Shows each picture as it is.</dd>
+        <dt>Blink</dt>
+        <dd>Flips quickly between this picture and a reference picture. Anything that moved jumps back and forth.</dd>
+        <dt>Diff (difference)</dt>
+        <dd>Subtracts the reference from this picture. Things that did not change turn gray; <b>yellow</b> means something appeared or got brighter, <b>blue</b> means it disappeared or got fainter. A moving star leaves a yellow and blue pair. Works best with Stacks.</dd>
+        <dt>VS (versus)</dt>
+        <dd>Chooses the reference for Blink and Diff: the previous picture, the first one, or any date you pick.</dd>
+      </dl>
+      <h3>The label at the top left</h3>
+      <p class="helpdd">Date (or the dates of the survey visit), the wavelength of light in micrometres (µm), how many pictures were stacked, the detector band, the data release, and any quality warnings at your target in plain words, for example "saturated" (too bright to measure). Hover a warning for the full description.</p>
+    </section>
+    <section>
+      <h3>Show – extra information</h3>
+      <dl>
+        <dt>Gaia (blue circles)</dt>
+        <dd>Stars measured by the European Gaia satellite, moved to where they were on each picture's date. Arrows show where fast stars travel in 10 years. In the click-for-details box: <b>G magnitude</b> = brightness (smaller number = brighter), <b>BP − RP colour</b> = how red the star is, <b>parallax</b> and <b>distance</b> = how far away it is (pc = parsec, about 3.26 light years), <b>proper motion</b> = how fast it crosses the sky (mas/yr = thousandths of an arcsecond per year).</dd>
+        <dt>WISE (yellow squares)</dt>
+        <dd>Infrared sources from NASA's WISE telescope. <b>W1</b> and <b>W2</b> are brightness at 3.4 and 4.6 µm (smaller = brighter); <b>W1 − W2</b> is how red it is. <b>Red squares</b> are possible brown dwarfs: bright and red in WISE but not seen by Gaia – cold objects that glow in infrared but are too faint in visible light. They are candidates, not confirmed.</dd>
+        <dt>Curve (light curve)</dt>
+        <dd>A small chart of how bright your target (the centre of the picture) is on each date, in millijansky (mJy, a unit of brightness). Click a point to jump to that date. Hollow points need care. For a very bright star the centre is "saturated", so the chart measures the glow around it instead – good for comparing dates.</dd>
+      </dl>
+      <h3>Click the picture</h3>
+      <p class="helpdd">Opens a details box for that spot: its RA and Dec, brightness in MJy/sr (a brightness per patch of sky), date, wavelength, the nearest Gaia and WISE objects, and a link to the original file at NASA's archive (IRSA).</p>
+    </section>
+  </div>
+</dialog>
 
 <!-- First-time guide (hidden for good once dismissed). -->
 <div class="firsthint" id="firstHint" role="note" hidden>

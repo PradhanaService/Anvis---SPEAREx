@@ -639,6 +639,28 @@ async function ux() {
   });
   await close(p);
 
+  const hp = await open("", { viewport: { width: 1366, height: 768 } });
+  await check("HELP the i button on page 1 opens one screen explaining every field; Esc closes it", async () => {
+    await hp.click('[data-help="helpPick"]');
+    const d = hp.locator("#helpPick");
+    assert(await d.isVisible());
+    const t = await d.textContent();
+    for (const w of ["Right Ascension", "Declination", "Field height", "Band", "Search", "Presets", "Releases"]) assert(t.includes(w), "missing " + w);
+    assert(await d.evaluate((x) => x.scrollHeight <= x.clientHeight), "should fit one screen at 1366×768");
+    await hp.keyboard.press("Escape"); assert(await d.isHidden());
+  });
+  await hp.goto("about:blank"); await hp.goto(BASE + "/" + BARNARD_STACKS);
+  await check("HELP the i button next to Back explains every control; × closes it; keys don't reach the player", async () => {
+    await hp.click('[data-help="helpExplore"]');
+    const d = hp.locator("#helpExplore"), t = await d.textContent();
+    for (const w of ["Stacks", "Frames", "Lock", "Normal", "Blink", "Diff", "VS", "Gaia", "WISE", "Curve", "W1 − W2", "parallax", "proper motion", "Speed"]) assert(t.includes(w), "missing " + w);
+    assert(await d.evaluate((x) => x.scrollHeight <= x.clientHeight), "should fit one screen at 1366×768");
+    const n0 = await hp.textContent("#frameNo");
+    await hp.keyboard.press("ArrowRight"); assert((await hp.textContent("#frameNo")) === n0);
+    await hp.click("#helpExplore [data-close]"); assert(await d.isHidden());
+  });
+  await close(hp);
+
   const h = await open();
   await check("UX first-time guide: shown once, dismissible, stays dismissed", async () => {
     assert(await h.isVisible("#firstHint") && /Pick a target → Search → press Play or Diff/.test(await h.textContent("#firstHint")));

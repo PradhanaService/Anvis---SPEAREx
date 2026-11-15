@@ -1417,7 +1417,7 @@ $("wiseBtn").addEventListener("click", () => { wise.on = !wise.on; drawGaia(); r
 
 // Keys on page 2: ← / → step, Space plays or pauses, Esc closes the pop-up.
 document.addEventListener("keydown", (e) => {
-  if ($("explore").hidden) return;
+  if ($("explore").hidden || document.querySelector("dialog[open]")) return;   // (not while a help screen is open)
   if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); return; }
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (e.key === " " && e.target.tagName === "BUTTON") return;
@@ -1515,6 +1515,16 @@ function readHash() {
 // ======================================================================
 // Start: a link with #ra=…&dec=… opens page 2 directly; otherwise page 1 on the start preset.
 // ======================================================================
+// ---- help screens: each i button opens the explanation of its page (a modal dialog: Esc,
+// the × button or a click outside closes it, and focus returns to the i button).
+document.querySelectorAll(".infobtn").forEach((b) => b.addEventListener("click", () => {
+  stop(); $(b.dataset.help).showModal();
+}));
+document.querySelectorAll("dialog.help").forEach((d) => {
+  d.querySelector("[data-close]").addEventListener("click", () => d.close());
+  d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // the backdrop
+});
+
 // ---- first-time guide: shown until dismissed (remembered in this browser, if storage works)
 const HINT_KEY = "anvis.hintDismissed";
 function initHint() {
