@@ -527,7 +527,7 @@ function toast(msg) {
 }
 
 async function openExplore(c) {
-  stop(); stopBlink(); ex.diff = false; closeSpectrum();
+  stop(); stopBlink(); ex.diff = false;
   $("pick").hidden = true; $("explore").hidden = false;
   window.scrollTo(0, 0);
 
@@ -911,226 +911,6 @@ function setStacked(on) {
 }
 $("stackBtn").addEventListener("click", () => setStacked(!ex.stacked));
 
-// ---- SPECTRUM: photometry of one position in every SPHEREx image, all six detectors
-// The server measures a 3-pixel-radius aperture (background-subtracted, converted to µJy with each
-// detector's solid-angle pixel map), following IRSA's SPHEREx Source Discovery Tool tutorial.
-// Points are coloured by sky pass (dark = earliest, light = latest); hollow points have bad pixels
-// in the aperture (SPHEREx Explanatory Supplement flags) and are less reliable.
-const SPEC_RAMP = ["#184f95", "#256abf", "#3987e5", "#6da7ec", "#9ec5f4", "#cde2fb"];   // validated ordinal ramp (dark surface)
-const DETECTOR_RANGES = [[0.75, 1.09], [1.10, 1.62], [1.63, 2.41], [2.42, 3.82], [3.83, 4.41], [4.42, 5.00]];
-const sp = { id: 0, ctrl: null, pos: null, what: "", pts: [], total: 0, found: 0, failed: 0, passOf: null, passes: [],
-             log: false, table: false, raf: 0 };
-function passColor(k, n) {
-  if (n <= 1) return SPEC_RAMP[3];
-  const t = (k / (n - 1)) * (SPEC_RAMP.length - 1), i = Math.min(SPEC_RAMP.length - 2, Math.floor(t)), f = t - i;
-  const a = SPEC_RAMP[i], b = SPEC_RAMP[i + 1], ch = (h, o) => parseInt(h.slice(o, o + 2), 16);
-  return "#" + [1, 3, 5].map((o) => Math.round(ch(a, o) + (ch(b, o) - ch(a, o)) * f).toString(16).padStart(2, "0")).join("");
-}
-const fmtFlux = (v) => {
-  const a = Math.abs(v);
-  return a >= 1e6 ? `${+(v / 1e6).toFixed(a >= 1e7 ? 0 : 1)}M` : a >= 1e3 ? `${+(v / 1e3).toFixed(a >= 1e4 ? 0 : 1)}k` : `${+v.toFixed(a >= 10 ? 0 : 1)}`;
-};
-function niceTicks(lo, hi, n) {
-  const step0 = (hi - lo) / Math.max(1, n), mag = Math.pow(10, Math.floor(Math.log10(step0)));
-  const step = [1, 2, 5, 10].map((m) => m * mag).find((x) => x >= step0) || 10 * mag;
-  const out = []; for (let v = Math.ceil(lo / step) * step; v <= hi + step * 1e-9; v += step) out.push(+v.toPrecision(12));
-  return out;
-}
-
-async function openSpectrum(pos, what) {
-  closeSpectrum();
-  const id = ++sp.id;
-  Object.assign(sp, { pos, what, pts: [], total: 0, found: 0, failed: 0, offScale: 0, passOf: null, passes: [], ctrl: new AbortController() });
-  $("spec").hidden = false; $("specBtn").setAttribute("aria-pressed", "true");
-  $("specWhat").textContent = what;
-  $("specPos").textContent = `${fmtRA(pos.ra)} ${fmtDec(pos.dec)}`;
-  $("specStatus").textContent = "Finding every SPHEREx image of this position (all six detectors)…";
-  drawSpectrum();
-  try {
-    const r = await fetch(`api/spectrum?ra=${pos.ra}&dec=${pos.dec}`, { signal: sp.ctrl.signal });
-    if (!r.ok || !r.body) { let m = r.statusText; try { m = (await r.json()).error || m; } catch {} throw new Error(m); }
-    const reader = r.body.getReader(), dec = new TextDecoder();
-    let buf = "";
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (id !== sp.id) { reader.cancel(); return; }
-      if (done) break;
-      buf += dec.decode(value, { stream: true });
-      let k;
-      while ((k = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, k); buf = buf.slice(k + 1);
-        if (line) onSpecLine(JSON.parse(line));
-      }
-    }
-    if (id === sp.id) { sp.done = true; specStatus(); scheduleDraw(); }
-  } catch (e) {
-    if (id === sp.id && e.name !== "AbortError") $("specStatus").textContent = "Could not measure the spectrum: " + e.message;
-  }
-}
-function onSpecLine(m) {
-  if ("total" in m) {
-    sp.total = m.total; sp.found = m.found;
-    // Sky passes from every image's date, so colours are fixed before the points arrive.
-    const order = m.mjds.map((x, i) => [x, i]).sort((a, b) => a[0] - b[0]);
-    const groups = groupPasses(order.map((x) => x[0]));
-    sp.passOf = new Array(m.mjds.length);
-    sp.passes = groups.map(([a, b], k) => {
-      for (let j = a; j <= b; j++) sp.passOf[order[j][1]] = k;
-      return { a: order[a][0], b: order[b][0], n: b - a + 1 };
-    });
-  } else if (m.error || m.flux_ujy === null || m.flux_ujy === undefined || !m.wavelength_um) {
-    sp.failed++;
-  } else {
-    sp.pts.push({ ...m, pass: sp.passOf ? sp.passOf[m.i] : 0 });
-  }
-  specStatus(); scheduleDraw();
-}
-function specStatus() {
-  const got = sp.pts.length, n = sp.total;
-  const sampled = sp.found > n ? ` (spread evenly over ${sp.found})` : "";
-  const prog = sp.done ? `Measured in ${got} of ${n} images${sampled}` : `Measuring… ${got + sp.failed} of ${n} images${sampled}`;
-  const fail = sp.failed ? ` · ${sp.failed} not measured (image edge or IRSA busy)` : "";
-  const offs = sp.offScale ? ` · ${sp.offScale} off scale, drawn at the edge (try LOG)` : "";
-  $("specStatus").textContent = `${prog}${fail}${offs} · 3-px aperture, µJy, not aperture-corrected`;
-}
-function scheduleDraw() { if (!sp.raf) sp.raf = requestAnimationFrame(() => { sp.raf = 0; drawSpectrum(); }); }
-function closeSpectrum() {
-  sp.id++; if (sp.ctrl) sp.ctrl.abort(); sp.ctrl = null; sp.done = false;
-  $("spec").hidden = true; $("specTip").hidden = true; $("specBtn").setAttribute("aria-pressed", "false");
-}
-
-function drawSpectrum() {
-  const svg = $("specSvg"), box = $("specPlot"), W = box.clientWidth, H = box.clientHeight;
-  $("specPlot").hidden = sp.table; $("specTableBox").hidden = !sp.table;
-  $("specLog").setAttribute("aria-pressed", String(sp.log)); $("specTable").setAttribute("aria-pressed", String(sp.table));
-  // legend
-  const leg = sp.passes.map((p, k) => {
-    const a = shortDate(Time2Date(p.a)), b = shortDate(Time2Date(p.b));
-    return `<span title="${esc(`${a.day} ${a.year} – ${b.day} ${b.year}, ${p.n} images`)}"><i style="background:${passColor(k, sp.passes.length)}"></i>Pass ${k + 1} · ${esc(MONTHS[+Time2Date(p.a).slice(5, 7) - 1])} ${esc(a.year)}</span>`;
-  });
-  if (sp.pts.some((p) => p.n_bad > 0)) leg.push(`<span><i style="border:1.5px solid #9ec5f4;background:transparent"></i>bad pixels in aperture</span>`);
-  $("specLegend").innerHTML = leg.join("");
-  if (sp.table) { drawSpecTable(); return; }
-  if (!W || !H) return;
-  const M = { l: 52, r: 10, t: 18, b: 30 }, pw = W - M.l - M.r, ph = H - M.t - M.b;
-  const xs = (x) => M.l + ((x - 0.7) / (5.1 - 0.7)) * pw;
-  const pts = sp.pts;
-  // y range from reliable points when there are enough, else all; points beyond it are clipped.
-  const good = pts.filter((p) => p.n_bad === 0);
-  const base = good.length >= 5 ? good : pts;
-  let lo, hi;
-  if (sp.log) {
-    const pos = base.filter((p) => p.flux_ujy > 0).map((p) => p.flux_ujy);
-    lo = pos.length ? Math.min(...pos) / 1.6 : 1; hi = pos.length ? Math.max(...pos) * 1.6 : 10;
-  } else {
-    const v = base.map((p) => p.flux_ujy);
-    lo = v.length ? Math.min(0, ...base.map((p) => p.flux_ujy - p.err_ujy)) : 0;
-    hi = v.length ? Math.max(...base.map((p) => p.flux_ujy + p.err_ujy)) * 1.08 : 1;
-    if (hi <= lo) hi = lo + 1;
-  }
-  const ys = sp.log ? (y) => M.t + ph - ((Math.log10(Math.max(y, lo)) - Math.log10(lo)) / (Math.log10(hi) - Math.log10(lo))) * ph
-                    : (y) => M.t + ph - ((y - lo) / (hi - lo)) * ph;
-  const clampY = (y) => Math.max(M.t, Math.min(M.t + ph, y));
-  const g = [];
-  // detector bands (alternating shade; the band shown in the viewer is outlined)
-  DETECTOR_RANGES.forEach(([a, b], i) => {
-    const on = ex.band === `SPHEREx-D${i + 1}`;
-    g.push(`<rect x="${xs(a)}" y="${M.t}" width="${xs(b) - xs(a)}" height="${ph}" fill="${i % 2 ? "rgba(255,255,255,0.035)" : "rgba(255,255,255,0.07)"}"${on ? ' stroke="rgba(255,255,255,0.35)" stroke-dasharray="3 3"' : ""}/>`);
-    g.push(`<text x="${(xs(a) + xs(b)) / 2}" y="${M.t - 5}" fill="${on ? "#ffffff" : "#a8a8a8"}" font-size="10" text-anchor="middle" font-family="DM Mono, monospace">D${i + 1}</text>`);
-  });
-  // axes, grid, ticks
-  const yt = sp.log ? (() => { const out = []; for (let e = Math.floor(Math.log10(lo)); e <= Math.ceil(Math.log10(hi)); e++) [1, 3].forEach((m) => { const v = m * 10 ** e; if (v >= lo && v <= hi) out.push(v); }); return out; })()
-                    : niceTicks(lo, hi, 4);
-  yt.forEach((v) => {
-    g.push(`<line x1="${M.l}" x2="${M.l + pw}" y1="${ys(v)}" y2="${ys(v)}" stroke="rgba(255,255,255,0.12)"/>`);
-    g.push(`<text x="${M.l - 6}" y="${ys(v) + 3}" fill="#c8c8c8" font-size="10" text-anchor="end" font-family="DM Mono, monospace">${fmtFlux(v)}</text>`);
-  });
-  if (!sp.log && lo < 0) g.push(`<line x1="${M.l}" x2="${M.l + pw}" y1="${ys(0)}" y2="${ys(0)}" stroke="rgba(255,255,255,0.35)"/>`);
-  [1, 2, 3, 4, 5].forEach((v) => g.push(`<text x="${xs(v)}" y="${M.t + ph + 14}" fill="#c8c8c8" font-size="10" text-anchor="middle" font-family="DM Mono, monospace">${v}</text>`));
-  g.push(`<text x="${M.l + pw}" y="${M.t + ph + 26}" fill="#a8a8a8" font-size="10" text-anchor="end" font-family="Public Sans, sans-serif">Wavelength (µm)</text>`);
-  g.push(`<text x="12" y="${M.t + ph / 2}" fill="#a8a8a8" font-size="10" text-anchor="middle" font-family="Public Sans, sans-serif" transform="rotate(-90 12 ${M.t + ph / 2})">Flux density (µJy)</text>`);
-  // error bars, then markers (earliest pass first, so the latest sits on top)
-  const order = pts.slice().sort((a, b) => a.pass - b.pass || a.n_bad - b.n_bad);
-  sp.screen = [];
-  let off = 0;
-  for (const p of order) {
-    const col = passColor(p.pass, sp.passes.length), x = xs(p.wavelength_um), yRaw = ys(p.flux_ujy), y = clampY(yRaw);
-    if (yRaw !== y) off++;
-    const y1 = clampY(ys(p.flux_ujy - p.err_ujy)), y2 = clampY(ys(p.flux_ujy + p.err_ujy));
-    if (Math.abs(y1 - y2) > 1) g.push(`<line x1="${x}" x2="${x}" y1="${y1}" y2="${y2}" stroke="${col}" stroke-opacity="0.6"/>`);
-    g.push(p.n_bad > 0
-      ? `<circle cx="${x}" cy="${y}" r="3.5" fill="#080808" stroke="${col}" stroke-width="1.5"/>`
-      : `<circle cx="${x}" cy="${y}" r="4" fill="${col}" stroke="#080808" stroke-width="1.5"/>`);
-    sp.screen.push({ x, y, p });
-  }
-  if (!pts.length) g.push(`<text x="${M.l + pw / 2}" y="${M.t + ph / 2}" fill="#a8a8a8" font-size="12" text-anchor="middle" font-family="Public Sans, sans-serif">${sp.done ? "No measurements" : "Waiting for the first measurements…"}</text>`);
-  sp.offScale = off; specStatus();
-  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
-  svg.innerHTML = g.join("");
-}
-const Time2Date = (mjd) => new Date((mjd - 40587) * 86400000).toISOString().slice(0, 19).replace("T", " ");
-
-function specRowText(p) {
-  return { wl: p.wavelength_um.toFixed(3), bw: (p.bandwidth_um || 0).toFixed(3), f: p.flux_ujy.toFixed(1), e: p.err_ujy.toFixed(1) };
-}
-function drawSpecTable() {
-  const rows = sp.pts.slice().sort((a, b) => a.wavelength_um - b.wavelength_um).map((p) => {
-    const t = specRowText(p);
-    return `<tr><td>${t.wl}</td><td>${t.f}</td><td>${t.e}</td><td>${bandShort(p.band)}</td><td>${p.pass + 1}</td><td>${esc(p.date.slice(0, 16))}</td><td>${esc(p.flags.join(" ") || "—")}</td></tr>`;
-  });
-  $("specTableBox").innerHTML = `<table><thead><tr><th>λ (µm)</th><th>Flux (µJy)</th><th>± (µJy)</th><th>Det</th><th>Pass</th><th>UTC</th><th>Flags in aperture</th></tr></thead><tbody>${rows.join("")}</tbody></table>`;
-}
-$("specCsv").addEventListener("click", () => {
-  const head = "wavelength_um,bandwidth_um,flux_ujy,err_ujy,detector,pass,utc,obs_id,n_bad_pixels,flags,url";
-  const lines = sp.pts.slice().sort((a, b) => a.wavelength_um - b.wavelength_um).map((p) => {
-    const t = specRowText(p);
-    return [t.wl, t.bw, t.f, t.e, bandShort(p.band), p.pass + 1, p.date, p.obs_id, p.n_bad, p.flags.join(" "), p.url].join(",");
-  });
-  const meta = `# SPHEREx aperture photometry at RA ${sp.pos.ra.toFixed(6)} Dec ${sp.pos.dec.toFixed(6)} (3-px radius, background-subtracted, not aperture-corrected). Data: NASA/IPAC IRSA.`;
-  const url = URL.createObjectURL(new Blob([meta + "\n" + head + "\n" + lines.join("\n") + "\n"], { type: "text/csv" }));
-  $("specCsv").href = url;
-  $("specCsv").download = `spherex_spectrum_${sp.pos.ra.toFixed(4)}_${sp.pos.dec.toFixed(4)}.csv`;
-  setTimeout(() => URL.revokeObjectURL(url), 10000);
-});
-$("specLog").addEventListener("click", () => { sp.log = !sp.log; drawSpectrum(); });
-$("specTable").addEventListener("click", () => { sp.table = !sp.table; drawSpectrum(); });
-$("specClose").addEventListener("click", closeSpectrum);
-$("specBtn").addEventListener("click", () => {
-  if (!$("spec").hidden) { closeSpectrum(); return; }
-  if (ex.target) openSpectrum(ex.target, ex.name === "Custom field" ? "target" : ex.name);
-});
-$("popSpec").addEventListener("click", () => {
-  if (!ex.pick || !exView.field) return;
-  openSpectrum(pixToSky(exView.field, ex.pick.ix, ex.pick.iy), "clicked point");
-});
-new ResizeObserver(() => { if (!$("spec").hidden) scheduleDraw(); }).observe($("specPlot"));
-["pointerdown", "pointerup", "wheel"].forEach((t) => $("spec").addEventListener(t, (e) => e.stopPropagation()));
-// hover read-out; click a point in the band on screen to show that exposure
-function nearestSpecPoint(e) {
-  const r = $("specSvg").getBoundingClientRect(), x = e.clientX - r.left, y = e.clientY - r.top;
-  let best = null, bd = 12;
-  for (const s of sp.screen || []) { const d = Math.hypot(s.x - x, s.y - y); if (d < bd) { bd = d; best = s; } }
-  return best;
-}
-$("specSvg").addEventListener("pointermove", (e) => {
-  const tip = $("specTip"), s = nearestSpecPoint(e);
-  if (!s) { tip.hidden = true; return; }
-  const p = s.p, t = specRowText(p);
-  const canJump = !ex.stacked && p.band === ex.band && ex.frames.some((f) => f.obs_id === p.obs_id && f.cut);
-  tip.textContent = `${p.date.slice(0, 16)} UTC · ${bandShort(p.band)} · pass ${p.pass + 1}\nλ ${t.wl} µm (±${(p.bandwidth_um / 2 || 0).toFixed(3)})\n${t.f} ± ${t.e} µJy` +
-    (p.flags.length ? `\nflags: ${p.flags.join(", ")}` : "") + (canJump ? "\nclick: show this image" : "");
-  tip.hidden = false;
-  const W = $("specPlot").clientWidth;
-  tip.style.left = (s.x > W * 0.6 ? s.x - tip.offsetWidth - 10 : s.x + 10) + "px";
-  tip.style.top = Math.max(0, s.y - 20) + "px";
-});
-$("specSvg").addEventListener("pointerleave", () => { $("specTip").hidden = true; });
-$("specSvg").addEventListener("click", (e) => {
-  const s = nearestSpecPoint(e); if (!s || ex.stacked || s.p.band !== ex.band) return;
-  const i = ex.frames.findIndex((f) => f.obs_id === s.p.obs_id && f.cut);
-  if (i >= 0) { stop(); go(i); }
-});
-
 // ---- full screen
 function setFs(on) {
   $("viewwrap").classList.toggle("fs", on);
@@ -1141,7 +921,7 @@ $("fsBtn").addEventListener("click", () => setFs(!$("viewwrap").classList.contai
 
 document.addEventListener("keydown", (e) => {
   if ($("explore").hidden) return;
-  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); else if (!$("spec").hidden) closeSpectrum(); else setFs(false); return; }
+  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); else setFs(false); return; }
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (e.key === " " && e.target.tagName === "BUTTON") return;
   if (e.key === "ArrowLeft") { stop(); stepFrame(-1); }
@@ -1151,7 +931,7 @@ document.addEventListener("keydown", (e) => {
 
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
-  stop(); stopBlink(); setFs(false); closeSpectrum(); ex.searchId++;
+  stop(); stopBlink(); setFs(false); ex.searchId++;
   history.replaceState(null, "", location.pathname + location.search);
   $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;

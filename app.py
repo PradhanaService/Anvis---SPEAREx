@@ -251,6 +251,7 @@ def bilinear(img, x, y):
 
 # Flags that make a pixel unreliable: the conservative CONTAINS_BAD_PIXEL set from the SPHEREx
 # Explanatory Supplement (Table 16), as used in IRSA's "Source Discovery Tool" tutorial.
+# Shown as the quality chip / red date dots when set within 1 pixel of the target.
 BAD_FLAGS = {"TRANSIENT", "OVERFLOW", "SUR_ERROR", "NONFUNC", "DICHROIC", "MISSING_DATA", "HOT", "COLD",
              "NONLINEAR", "CROSSTALK", "GHOST", "GHOST_FPA", "GHOST_EXT", "STREAK", "PERSIST", "BLOOM",
              "SNOWBALL", "HALO", "SATELLITE_HALO"}
@@ -267,9 +268,6 @@ def flag_names(header):
                 out[int(mask)] = (str(header[key]), str(header.get("MSKD" + n, "")))
     return out
 
-
-def bad_mask_bits(header):
-    return sum(m for m, (name, _) in flag_names(header).items() if name in BAD_FLAGS)
 
 
 def target_flags(flags_hdu, xc, yc):
@@ -432,133 +430,6 @@ def cutouts():
                     line = json.dumps({"i": i, "error": str(e)})
                 yield line + "\n"
         finally:  # the browser went away (new search, closed tab): drop work not yet started
-            for fut in futures:
-                fut.cancel()
-
-    return Response(generate(), mimetype="application/x-ndjson")
-
-
-# ----------------------------------------------------------------------------- spectra
-# Point-source photometry in every SPHEREx image of a position, all six detectors, following
-# IRSA's "SPHEREx Source Discovery Tool" tutorial: surface brightness (MJy/sr) is converted to
-# flux density (µJy) with each detector's solid-angle pixel map, then summed in a 3-pixel-radius
-# aperture after subtracting the local background.
-SAPM_VERSION = "cal-sapm-v3-2026-191"   # solid-angle pixel map calibration used in the tutorial (DR1)
-SAPM_URL = (IRSA + "/ibe/data/spherex/dr1/solid_angle_pixel_map/{v}/{d}/solid_angle_pixel_map_D{d}_spx_{v}.fits")
-APERTURE_PX, ANNULUS_PX = 3.0, (5.0, 8.0)
-MJYSR_TO_UJY_ARCSEC2 = 1e12 / (180 / np.pi * 3600) ** 2   # 1 MJy/sr = 23.5045 µJy/arcsec²
-MAX_SPECTRUM_IMAGES = 900
-_sapm_lock = threading.Lock()
-_sapm_open = {}   # detector -> memory-mapped map (the file stays open; only pixels read are loaded)
-
-
-def sapm(detector):
-    """Solid-angle pixel map (arcsec² per pixel) for a detector; downloaded once, then read from disk."""
-    path = os.path.join(CACHE_DIR, f"sapm_D{detector}_{SAPM_VERSION}.fits")
-    with _sapm_lock:
-        if detector in _sapm_open:
-            return _sapm_open[detector]
-        if not os.path.exists(path):
-            data = irsa_get(SAPM_URL.format(v=SAPM_VERSION, d=detector), timeout=300).content
-            os.makedirs(CACHE_DIR, exist_ok=True)
-            with open(path + ".tmp", "wb") as f:
-                f.write(data)
-            os.replace(path + ".tmp", path)
-        _sapm_open[detector] = fits.open(path, memmap=True)["IMAGE"].data
-        return _sapm_open[detector]
-
-
-@lru_cache(maxsize=20000)
-def photometry(url, ra, dec):
-    """Aperture photometry of (ra, dec) in one SPHEREx image. Returns a small dict."""
-    with fetch_cutout(url, ra, dec, 0.035) as hdul:   # ~126″: aperture plus background annulus
-        hdr = hdul["IMAGE"].header
-        img = hdul["IMAGE"].data.astype(float) - hdul["ZODI"].data.astype(float)
-        var = hdul["VARIANCE"].data.astype(float)
-        flags = hdul["FLAGS"].data
-        bad_bits = bad_mask_bits(hdul["FLAGS"].header)
-        sky = WCS(hdr)
-        xc, yc = (float(v) for v in sky.world_to_pixel_values(ra, dec))
-        try:
-            spec = WCS(hdr, fobj=hdul, key="W")
-            spec.sip = None
-            wl, bw = (float(np.asarray(v)) for v in spec.pixel_to_world_values(xc, yc))
-        except Exception:
-            wl = bw = None
-        detector = int(hdr["DETECTOR"])
-        # Cutout pixel -> full-detector pixel (0-based), from the cutout's "A" WCS.
-        x_off, y_off = 1 - float(hdr["CRPIX1A"]), 1 - float(hdr["CRPIX2A"])
-        mjd = hdr.get("MJD-AVG") or hdr.get("MJD-OBS")
-        names = flag_names(hdul["FLAGS"].header)
-
-    ny, nx = img.shape
-    yy, xx = np.mgrid[0:ny, 0:nx]
-    r = np.hypot(xx - xc, yy - yc)
-    ap = r <= APERTURE_PX
-    ring = (r >= ANNULUS_PX[0]) & (r <= ANNULUS_PX[1]) & np.isfinite(img) & ((flags & bad_bits) == 0)
-    if ap.sum() < 20 or ring.sum() < 20:
-        raise RuntimeError("target too close to the image edge")
-    bkg = float(np.median(img[ring]))
-    # Solid angle of each aperture pixel from the detector's map.
-    dy, dx = np.nonzero(ap)
-    area = np.asarray(sapm(detector)[np.clip((dy + y_off).astype(int), 0, 2039), np.clip((dx + x_off).astype(int), 0, 2039)], float)
-    vals, vars_ = img[ap] - bkg, var[ap]
-    good = np.isfinite(vals) & np.isfinite(vars_)
-    to_ujy = MJYSR_TO_UJY_ARCSEC2 * area
-    ap_flags = int(np.bitwise_or.reduce(flags[ap])) if ap.any() else 0
-    n_bad = int(((flags[ap] & bad_bits) != 0).sum() + (~good).sum())
-    return {
-        "detector": detector, "mjd": mjd, "wavelength_um": wl, "bandwidth_um": bw,
-        "flux_ujy": float(np.sum(vals[good] * to_ujy[good])) if good.any() else None,
-        "err_ujy": float(np.sqrt(np.sum(vars_[good] * to_ujy[good] ** 2))) if good.any() else None,
-        "n_bad": n_bad, "n_pix": int(ap.sum()),
-        "flags": [name for mask, (name, _) in sorted(names.items()) if ap_flags & mask and name in BAD_FLAGS],
-    }
-
-
-@app.get("/api/spectrum")
-def spectrum():
-    """Photometry of a position in every SPHEREx image (all six detectors), streamed one JSON line each.
-
-    First line: {"total": N, "found": M, "mjds": [...]}; then {"i", "obs_id", "date", "band", ...photometry} or {"i", "error"}.
-    """
-    try:
-        ra, dec = parse_position()
-        rows = sia_rows(round(ra, 6), round(dec, 6))
-    except ValueError as e:
-        return bad(str(e))
-    except Exception as e:
-        return bad(f"IRSA SIA query failed: {e}", 502)
-    seen, images = set(), []
-    for row in rows:
-        band, url = row.get("energy_bandpassname") or "", row.get("access_url") or ""
-        if band not in BANDS or row.get("dataproduct_subtype") != "science" or not url.startswith(DATA_PREFIX):
-            continue
-        if (row["obs_id"], band) in seen:
-            continue
-        seen.add((row["obs_id"], band))
-        images.append({"obs_id": row["obs_id"], "band": band, "url": url, "mjd": float(row["t_min"])})
-    found = len(images)
-    if found > MAX_SPECTRUM_IMAGES:   # spread evenly in time
-        images.sort(key=lambda m: m["mjd"])
-        step = found / MAX_SPECTRUM_IMAGES
-        images = [images[int(i * step)] for i in range(MAX_SPECTRUM_IMAGES)]
-    pos = (round(ra, 6), round(dec, 6))
-
-    def generate():
-        yield json.dumps({"total": len(images), "found": found, "mjds": [m["mjd"] for m in images]}) + "\n"
-        futures = {_pool.submit(photometry, m["url"], *pos): i for i, m in enumerate(images)}
-        try:
-            for fut in cf.as_completed(futures):
-                i, m = futures[fut], images[futures[fut]]
-                line = {"i": i, "obs_id": m["obs_id"], "band": m["band"],
-                        "date": Time(m["mjd"], format="mjd").isot[:19].replace("T", " "), "url": m["url"]}
-                try:
-                    line.update(fut.result())
-                except Exception as e:
-                    line["error"] = str(e)
-                yield json.dumps(line) + "\n"
-        finally:
             for fut in futures:
                 fut.cancel()
 
