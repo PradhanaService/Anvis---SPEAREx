@@ -94,8 +94,15 @@ function cubicTaps(n, S) {
   return { idx, wts };
 }
 
+// Diverging colour map for difference images (DIFF): zero is the neutral background gray,
+// positive (brighter now) runs to yellow, negative (fainter now) to blue. Colours are from the
+// palette; yellow / blue stay distinct for colour-blind viewers. Values are scaled by asinh like
+// the normal stretch, so small changes are still visible.
+const DIVERGING = { neg: [56, 189, 248], mid: [38, 38, 38], pos: [255, 210, 63], stretch: 3 };
+
 // Upsample a w x h frame to OW x OH (bicubic, clamped so stars get no halos) with the stretch applied.
-function drawFrame(w, h, data, lo, hi, invert, OW, OH) {
+// cmap (optional): DIVERGING, drawn symmetric about the middle of lo..hi instead of in grays.
+function drawFrame(w, h, data, lo, hi, invert, OW, OH, cmap) {
   // No-data pixels borrow their nearest valid neighbour for interpolation only; they are still
   // drawn as "no data" below.
   const vals = new Float32Array(w * h), valid = new Uint8Array(w * h);
@@ -130,6 +137,12 @@ function drawFrame(w, h, data, lo, hi, invert, OW, OH) {
       for (let k = 0; k < 4; k++) v += rows[ty.idx[oy * 4 + k] * OW + ox] * ty.wts[oy * 4 + k];
       const a = rows[y1 * OW + ox], b = rows[y2 * OW + ox];
       v = Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
+      if (cmap) {
+        const t = Math.min(1, Math.max(-1, (2 * (v - lo)) / range - 1)), end = t < 0 ? cmap.neg : cmap.pos;
+        const a = Math.asinh(cmap.stretch * Math.abs(t)) / Math.asinh(cmap.stretch);
+        for (let c = 0; c < 3; c++) img.data[p + c] = Math.round(cmap.mid[c] + (end[c] - cmap.mid[c]) * a);
+        img.data[p + 3] = 255; continue;
+      }
       const t = Math.min(1, Math.max(0, (v - lo) / range));
       let g = Math.round((255 * Math.asinh(STRETCH * t)) / STRETCH_NORM);
       if (invert) g = 255 - g;
@@ -215,13 +228,19 @@ class SkyView {
   }
 
   // Show a frame: { width, height, data, pixel_scale_arcsec } at sky centre (ra, dec).
+  // display: {minb, maxb} percentiles for the brightness range, or range: [lo, hi] to fix it;
+  // invert; cmap (optional colour map, see drawFrame).
   setImage(cut, ra, dec, display) {
     const newGeom = !this.field || this.field.nx !== cut.width || this.field.ny !== cut.height;
     this.field = { nx: cut.width, ny: cut.height, scale: cut.pixel_scale_arcsec || 6.15, ra, dec };
     if (newGeom) { this.z = 1; this.tx = 0; this.ty = 0; }
-    const finite = cut.data.filter((v) => v !== null).sort((a, b) => a - b);
-    const lo = percentile(finite, display.minb);
-    let hi = percentile(finite, display.maxb); if (hi <= lo) hi = lo + 1e-6;
+    let lo, hi;
+    if (display.range) [lo, hi] = display.range;
+    else {
+      const finite = cut.data.filter((v) => v !== null).sort((a, b) => a - b);
+      lo = percentile(finite, display.minb); hi = percentile(finite, display.maxb);
+    }
+    if (hi <= lo) hi = lo + 1e-6;
     // Render at about the box's device resolution (capped for speed); zoom scales this picture.
     const r = this.rect(), dpr = Math.min(2, window.devicePixelRatio || 1);
     let f = Math.max(1, Math.min(r.width * dpr / cut.width, r.height * dpr / cut.height) || 1);
@@ -229,7 +248,7 @@ class SkyView {
     const OW = Math.max(cut.width, Math.round(cut.width * f)), OH = Math.max(cut.height, Math.round(cut.height * f));
     if (!this.off) this.off = document.createElement("canvas");
     this.off.width = OW; this.off.height = OH;
-    this.off.getContext("2d").putImageData(drawFrame(cut.width, cut.height, cut.data, lo, hi, display.invert, OW, OH), 0, 0);
+    this.off.getContext("2d").putImageData(drawFrame(cut.width, cut.height, cut.data, lo, hi, display.invert, OW, OH, display.cmap), 0, 0);
     this.hasImage = true;
     this.fitClamp(); this.draw();
   }
@@ -618,13 +637,16 @@ PRESETS.forEach((t) => {
 //          {stack: true, epoch, start, end, n, urls}.
 //   frames = the items of the current view (lists[view].items); playback, BLINK, the strip and
 //          the pop-up all work on it, so they behave the same in both views
-//   current = index shown; timer/playing/speedIdx = playback; blink* = BLINK state
+//   current = index shown; timer/playing/speedIdx = playback
+//   mode = "normal" | "blink" | "diff"; ref = what BLINK / DIFF compare with: "prev" (the nearest
+//          earlier loaded item), "first" (the first loaded item) or an item index;
+//          blinkAlt/blinkTimer = BLINK state; diff = the difference image on screen (for the pop-up)
 //   pick = clicked field pixel {ix, iy} for the About pop-up
 //   searchId bumps on every search, so replies for an older search are ignored
 const ex = {
   target: null, band: "", h: 0, w: 0, view: "stacks", lists: {},
   frames: [], current: 0, timer: null, playing: false, speedIdx: 2,
-  blink: false, blinkAlt: false, blinkTimer: null,
+  mode: "normal", ref: "prev", blinkAlt: false, blinkTimer: null, diff: null,
   pick: null,
   searchId: 0,
 };
@@ -699,7 +721,8 @@ async function openExplore(c) {
   ex.lists.frames.items = shown.map((f) => ({ ...f, cut: null, failed: false }));
   if (!ex.lists.stacks.items.length) ex.view = "frames";   // (an older server without epochs)
   ex.frames = ex.lists[ex.view].items;
-  buildStrip(); renderView(); renderBar(); writeHash(c);
+  if (typeof ex.ref === "number" && ex.ref >= ex.frames.length) ex.ref = "prev";
+  buildStrip(); renderView(); setMode(ex.mode); writeHash(c);
   loadList(ex.view, id);
 }
 
@@ -729,8 +752,8 @@ async function loadList(view, id) {
     updateChip(i);
     if (!exView.hasImage && frame && i === ex.current) exLoading("");
     else if (!exView.hasImage) exLoading(loadingText(L));
-    // An earlier item arriving can change what BLINK compares against.
-    if (i === ex.current || (ex.blink && i < ex.current)) showFrame();
+    // An item arriving can change what BLINK / DIFF compare with.
+    if (i === ex.current || (ex.mode !== "normal" && (i < ex.current || ex.ref !== "prev"))) showFrame();
   };
   for (let pass = 0; pass < 2 && id === ex.searchId; pass++) {
     const batch = pass === 0 ? L.items.slice() : L.items.filter((f) => f.failed);
@@ -778,6 +801,11 @@ function setView(v) {
                              : ex.frames.findIndex((f) => f.epoch === cur.epoch);
     ex.current = Math.max(0, k);
   }
+  if (typeof ex.ref === "number") {   // a chosen reference follows to the other view, like the current item
+    const r = ex.lists[v === "stacks" ? "frames" : "stacks"].items[ex.ref];
+    const k = r ? ex.frames.findIndex((x) => x.epoch === r.epoch) : -1;
+    ex.ref = k >= 0 ? k : "prev";
+  }
   $("noObs").hidden = true;
   buildStrip(); showFrame(); writeHash(ex.target);
   loadList(v, ex.searchId);
@@ -801,6 +829,7 @@ function buildStrip() {
     strip.appendChild(b);
     updateChip(i);
   });
+  buildRefOptions();
   updateStrip();
 }
 function updateChip(i) {
@@ -832,16 +861,23 @@ function epochDays(s) {
     : a.year === b.year ? `${a.day} – ${b.day} ${b.year}` : `${a.day} ${a.year} – ${b.day} ${b.year}`;
 }
 
-// ---- the picture (the current frame, or during BLINK the frame it is compared with)
-// BLINK compares with the nearest earlier observation that loaded (-1 if none).
+// ---- the picture (the current frame, its difference from the reference, or during BLINK the
+// reference it is compared with)
+// Index of the reference for BLINK / DIFF (see ex.ref), or -1 if there is none to compare with
+// (not loaded yet, or the current item is the reference itself).
 function refIndex() {
-  for (let i = ex.current - 1; i >= 0; i--) if (ex.frames[i].cut) return i;
-  return -1;
+  let r = -1;
+  if (ex.ref === "prev") { for (let i = ex.current - 1; i >= 0; i--) if (ex.frames[i].cut) { r = i; break; } }
+  else if (ex.ref === "first") r = ex.frames.findIndex((f) => f.cut);
+  else if (ex.frames[ex.ref] && ex.frames[ex.ref].cut) r = ex.ref;
+  return r === ex.current ? -1 : r;
 }
 function shownIndex() {
   const r = refIndex();
-  return ex.blink && ex.blinkAlt && r >= 0 ? r : ex.current;
+  return ex.mode === "blink" && ex.blinkAlt && r >= 0 ? r : ex.current;
 }
+// Short name of an item for labels: "SURVEY 2" or "10 May 2025".
+const itemName = (x) => x.stack ? `Survey ${x.epoch + 1}` : `${shortDate(x.date).day} ${shortDate(x.date).year}`;
 // Draw the frame to show, and refresh its label, credit link, bar, strip, pop-up and marks.
 function showFrame() {
   const k = ex.current, f = ex.frames[k]; if (!f) return;
@@ -862,7 +898,11 @@ function showFrame() {
       `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
   }
 
-  if (shown.cut) {
+  const ri = refIndex();
+  ex.diff = ex.mode === "diff" && shown.cut && ri >= 0 ? diffImage(shown.cut, ex.frames[ri].cut) : null;
+  if (ex.diff) {
+    exView.setImage(ex.diff, ex.target.ra, ex.target.dec, { range: [-ex.diff.scale, ex.diff.scale], cmap: DIVERGING });
+  } else if (shown.cut) {
     exView.setImage(shown.cut, ex.target.ra, ex.target.dec, DISPLAY);
   } else {
     exView.clearImage();
@@ -874,19 +914,52 @@ function showFrame() {
   renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks();
 }
 
-// The label at the top of the image while BLINK is on.
+// The label at the top of the image in BLINK / DIFF, and the DIFF colour legend.
 function renderMode() {
-  const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
-  lbl.hidden = !ex.blink;
-  if (!f) return;
-  const day = (x) => x.stack ? `SURVEY ${x.epoch + 1}` : shortDate(x.date).day;
-  const skipped = ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
-  if (ex.blink) {
-    lbl.textContent = !f.cut ? "BLINK · THIS OBSERVATION IS NOT LOADED"
-      : p ? `BLINK · ${day(p)} ↔ ${day(f)} · NOW ${day(ex.frames[shownIndex()])}${skipped}`
-      : "BLINK · NO EARLIER LOADED OBSERVATION";
+  const lbl = $("modeLabel"), leg = $("diffLegend"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
+  lbl.hidden = ex.mode === "normal" || !f;
+  leg.hidden = !ex.diff;
+  if (!f || ex.mode === "normal") return;
+  const up = (x) => itemName(x).toUpperCase();
+  const skipped = ex.ref === "prev" && ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
+  const why = !f.cut ? "THIS ONE IS NOT LOADED"
+    : ri >= 0 ? ""
+    : ex.ref === "prev" ? "NO EARLIER LOADED ONE TO COMPARE WITH"
+    : "THIS IS THE REFERENCE · PICK ANOTHER DATE";
+  if (ex.mode === "blink") {
+    lbl.textContent = why ? `BLINK · ${why}` : `BLINK · ${up(p)} ↔ ${up(f)} · NOW ${up(ex.frames[shownIndex()])}${skipped}`;
+  } else {
+    lbl.textContent = why ? `DIFF · ${why} · SHOWING THE IMAGE` : `DIFF · ${up(f)} − ${up(p)}${skipped}`;
+  }
+  if (ex.diff) {
+    $("diffScale").textContent = `full colour ±${DIFF_SIGMAS}σ · noise ${fmtVal(ex.diff.sigma)} MJy/sr`;
   }
 }
+const fmtVal = (v) => Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2);
+
+// ---- MODE: normal, BLINK (flip with the reference) or DIFF (minus the reference)
+function setMode(m) {
+  if (!["normal", "blink", "diff"].includes(m)) m = "normal";
+  clearInterval(ex.blinkTimer); ex.blinkAlt = false;
+  ex.mode = m;
+  if (m === "blink") ex.blinkTimer = setInterval(() => { ex.blinkAlt = !ex.blinkAlt; showFrame(); }, BLINK_MS);
+  document.querySelectorAll("#modeSeg [data-mode]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.mode === m)));
+  $("refSel").hidden = $("refLbl").hidden = m === "normal";
+  showFrame(); writeHash(ex.target);
+}
+function stopBlink() { clearInterval(ex.blinkTimer); ex.blinkAlt = false; }
+document.querySelectorAll("#modeSeg [data-mode]").forEach((b) => b.addEventListener("click", () => setMode(b.dataset.mode)));
+// Reference choices: previous, first, or any item of the current view.
+function buildRefOptions() {
+  const sel = $("refSel");
+  sel.innerHTML = `<option value="prev">Previous</option><option value="first">First</option>` +
+    ex.frames.map((x, i) => `<option value="${i}">${esc(itemName(x))}${x.stack ? "" : " " + esc(shortDate(x.date).time)}</option>`).join("");
+  sel.value = String(ex.ref);
+}
+$("refSel").addEventListener("change", (e) => {
+  const v = e.target.value; ex.ref = v === "prev" || v === "first" ? v : Number(v);
+  showFrame(); writeHash(ex.target);
+});
 
 // Overlays that follow the image: region outline, selection ring, pop-up position, Gaia rings.
 function placeExMarks() {
@@ -913,7 +986,12 @@ function renderPop() {
   const de = -(ex.pick.ix - fld.nx / 2) * fld.scale, dn = (fld.ny / 2 - ex.pick.iy) * fld.scale;
   const off = Math.hypot(de, dn), pa = ((Math.atan2(de, dn) * 180 / Math.PI) + 360) % 360;
   $("popId").textContent = `${fmtRA(c.ra)} ${fmtDec(c.dec)}`;
-  const bright = prow("Brightness", val === undefined ? "—" : val === null ? "no data" : `${val.toFixed(3)} MJy/sr`, val === null);
+  let bright = prow("Brightness", val === undefined ? "—" : val === null ? "no data" : `${val.toFixed(3)} MJy/sr`, val === null);
+  if (ex.diff) {   // DIFF: the change since the reference at this pixel, also in units of the noise
+    const k = py * ex.diff.width + px, dv = ex.diff.change[k], z = ex.diff.data[k], r = ex.frames[refIndex()];
+    bright += prow(`Change vs ${itemName(r)}`, dv === null ? "no data"
+      : `${dv >= 0 ? "+" : ""}${fmtVal(dv)} MJy/sr · ${z >= 0 ? "+" : ""}${z.toFixed(1)}σ`);
+  }
   if (f.stack) {
     const cut = f.cut || {}, wr = cut.wavelength_range_um;
     const rows = [
@@ -1006,7 +1084,6 @@ function renderBar() {
   $("next").setAttribute("aria-disabled", String(!n || nextLoadable(k, 1) < 0));
   $("play").classList.toggle("on", ex.playing); $("play").setAttribute("aria-pressed", String(ex.playing));
   $("pause").setAttribute("aria-pressed", String(!ex.playing));
-  $("blinkBtn").setAttribute("aria-pressed", String(ex.blink));
   $("speedSel").value = String(ex.speedIdx);
 }
 SPEED_LIST.forEach((s, i) => { const o = document.createElement("option"); o.value = i; o.textContent = speedLabel(s); $("speedSel").appendChild(o); });
@@ -1018,15 +1095,6 @@ $("prev").addEventListener("click", () => { stop(); stepFrame(-1); });
 $("next").addEventListener("click", () => { stop(); stepFrame(1); });
 $("play").addEventListener("click", play);
 $("pause").addEventListener("click", stop);
-
-// ---- BLINK: alternate the current frame with the previous loaded one
-function stopBlink() { clearInterval(ex.blinkTimer); ex.blink = false; ex.blinkAlt = false; }
-$("blinkBtn").addEventListener("click", () => {
-  if (ex.blink) { stopBlink(); showFrame(); return; }
-  ex.blink = true; ex.blinkAlt = false;
-  ex.blinkTimer = setInterval(() => { ex.blinkAlt = !ex.blinkAlt; showFrame(); }, BLINK_MS);
-  showFrame();
-});
 
 // ---- GAIA: Gaia DR3 stars from MAST, moved to each frame's date
 // Gaia positions are for epoch 2016.0; each star is moved by its proper motion to the date of the
@@ -1175,6 +1243,8 @@ function writeHash(c) {
   p.set("speed", SPEED_LIST[ex.speedIdx]);
   if (gaia.on) p.set("gaia", 1);
   if (ex.view !== "stacks") p.set("view", ex.view);
+  if (ex.mode !== "normal") p.set("mode", ex.mode);
+  if (ex.ref !== "prev") p.set("ref", ex.ref);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
@@ -1192,6 +1262,9 @@ function readHash() {
   }
   gaia.on = p.get("gaia") === "1";
   ex.view = VIEWS.includes(p.get("view")) ? p.get("view") : "stacks";
+  ex.mode = ["blink", "diff"].includes(p.get("mode")) ? p.get("mode") : "normal";
+  const r = p.get("ref");
+  ex.ref = r === "first" ? "first" : /^\d+$/.test(r || "") ? Number(r) : "prev";
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }

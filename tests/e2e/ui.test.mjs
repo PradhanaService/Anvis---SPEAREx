@@ -250,8 +250,25 @@ async function stacks() {
   await check("STACK Prev / Next / BLINK step through epochs", async () => {
     await p.locator(".fr").first().click(); await p.click("#next");
     assert((await p.textContent("#frameNo")).startsWith("2/"));
-    await p.click("#blinkBtn"); assert(/SURVEY 1 ↔ SURVEY 2/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
-    await p.click("#blinkBtn");
+    await p.click('[data-mode="blink"]'); assert(/SURVEY 1 ↔ SURVEY 2/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
+    await p.click('[data-mode="normal"]');
+  });
+  await check("STACK DIFF: Barnard's Star leaves a bright + dark pair (it moved north)", async () => {
+    await p.locator(".fr").last().click();
+    await p.click('[data-mode="diff"]'); await p.selectOption("#refSel", "first");
+    // Along the column through the star: the strongest positive change lies north of the strongest negative one.
+    const r = await p.evaluate(() => {
+      const d = ex.diff, W = d.width, x0 = Math.round(W / 2);
+      let best = { pos: [-Infinity, 0], neg: [Infinity, 0] };
+      for (let y = 0; y < d.height; y++) for (let x = x0 - 2; x <= x0 + 2; x++) {
+        const v = d.data[y * W + x]; if (v === null) continue;
+        if (v > best.pos[0]) best.pos = [v, y]; if (v < best.neg[0]) best.neg = [v, y];
+      }
+      return best;
+    });
+    assert(r.pos[0] >= 5 && r.neg[0] <= -5 && r.pos[1] < r.neg[1], JSON.stringify(r));   // row 0 = north
+    await p.selectOption("#refSel", "prev"); await p.click('[data-mode="normal"]');
+    await p.locator(".fr").nth(1).click();
   });
   await check("STACK pop-up shows the epoch, images stacked, wavelengths and noise", async () => {
     const sky = await p.locator("#exSky").boundingBox(); await p.mouse.click(sky.x + sky.width / 3, sky.y + sky.height / 3);
@@ -266,6 +283,15 @@ async function stacks() {
     }
   });
   await close(p);
+
+  const u = await open(BARNARD_STACKS + "&mode=diff&ref=first");
+  await exploreReady(u);
+  await check("URL: mode=diff&ref=first is restored", async () => {
+    assert((await u.getAttribute('[data-mode="diff"]', "aria-pressed")) === "true" && (await u.inputValue("#refSel")) === "first");
+    await u.locator(".fr").last().click();
+    assert(/^DIFF · SURVEY \d − SURVEY 1$/.test(await u.textContent("#modeLabel")), await u.textContent("#modeLabel"));
+  });
+  await close(u);
 
   // Noise: an uncrowded field (WISE 0855), where pixel-to-pixel scatter is mostly noise.
   const w = await open("#ra=133.795129&dec=-7.245147&size=600&band=SPHEREx-D3");
@@ -324,9 +350,9 @@ async function page2() {
     const flagged = await p.evaluate(() => ex.frames.filter((f) => f.cut && f.cut.quality.length).length);
     assert((await p.locator(".fr .dotf:not([hidden])").count()) === flagged);
   });
-  await check("P2 header has only Back; control bar has VIEW, counter, BLINK and GAIA", async () => {
+  await check("P2 header has only Back; control bar has VIEW, counter, MODE and GAIA", async () => {
     assert((await p.locator(".extop").innerText()).trim() === "Back");
-    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,BLINK,GAIA");
+    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,NORMAL,BLINK,DIFF,GAIA");
     assert((await p.locator("#regionInfo, #flagChip, #diffBtn, #fsBtn, #exZoom [data-zoom=reset]").count()) === 0);
   });
   await check("P2 clicking a date shows that image", async () => {
@@ -378,11 +404,46 @@ async function page2() {
   });
   await check("P2 BLINK alternates with the previous image and labels it", async () => {
     await p.locator(".fr").nth(5).click();
-    await p.click("#blinkBtn"); assert((await p.getAttribute("#blinkBtn", "aria-pressed")) === "true");
+    await p.click('[data-mode="blink"]'); assert((await p.getAttribute('[data-mode="blink"]', "aria-pressed")) === "true");
     assert(/^BLINK · .+ ↔ .+ · NOW /.test(await p.textContent("#modeLabel")));
     const seen = new Set(); for (let i = 0; i < 10; i++) { seen.add(await p.textContent("#frameNo")); await p.waitForTimeout(120); }
     assert(seen.has("5/" + (await p.evaluate(() => ex.frames.length))) && seen.size === 2, [...seen].join());
-    await p.click("#blinkBtn"); assert(await p.isHidden("#modeLabel"));
+    await p.click('[data-mode="normal"]'); assert(await p.isHidden("#modeLabel"));
+  });
+  // Colourful pixels in the picture: a difference image is drawn in yellow / blue, a normal one in grays.
+  const colourful = (p) => p.$eval("#exSky canvas", (c) => {
+    const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0;
+    for (let i = 0; i < d.length; i += 4) if (Math.abs(d[i] - d[i + 2]) > 40) n++;
+    return n;
+  });
+  await check("P2 DIFF shows current − previous in colour, with a legend and the VS choice", async () => {
+    await p.locator(".fr").nth(5).click();
+    assert(await p.isHidden("#refSel"), "VS only appears in Blink / Diff");
+    await p.click('[data-mode="diff"]');
+    assert(/^DIFF · .+ − .+/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
+    assert(await p.isVisible("#diffLegend") && /5σ/.test(await p.textContent("#diffScale")));
+    assert(await p.isVisible("#refSel") && (await p.inputValue("#refSel")) === "prev");
+    assert((await colourful(p)) > 1000, "colour");
+    assert(/mode=diff/.test(await p.evaluate(() => location.hash)));
+  });
+  await check("P2 DIFF reference: first image, a chosen image, and 'this is the reference'", async () => {
+    await p.selectOption("#refSel", "first");
+    const first = await p.evaluate(() => itemName(ex.frames[0]).toUpperCase());
+    assert((await p.textContent("#modeLabel")).endsWith("− " + first), await p.textContent("#modeLabel"));
+    assert(/ref=first/.test(await p.evaluate(() => location.hash)));
+    await p.selectOption("#refSel", "2");
+    assert(await p.evaluate(() => refIndex() === 2));
+    await p.locator(".fr").nth(2).click();
+    assert(/THIS IS THE REFERENCE/.test(await p.textContent("#modeLabel")) && await p.isHidden("#diffLegend"));
+    await p.locator(".fr").nth(5).click();
+  });
+  await check("P2 DIFF pop-up shows the change at the clicked point", async () => {
+    const sky = await p.locator("#exSky").boundingBox(); await p.mouse.click(sky.x + sky.width / 2, sky.y + sky.height / 2);
+    assert(/Change vs \d{1,2} \w{3} 20\d\d(no data|[+-][\d.e-]+ MJy\/sr · [+-]\d+\.\dσ)/.test(await p.textContent("#popRows")), await p.textContent("#popRows"));
+    await p.click("#popClose");
+    await p.selectOption("#refSel", "prev");
+    await p.click('[data-mode="normal"]');
+    assert(await p.isHidden("#diffLegend") && await p.isHidden("#refSel") && (await colourful(p)) < 50);
   });
   await check("P2 zoom in / out on the image", async () => {
     await p.click('#exZoom [data-zoom="in"]'); assert((await p.evaluate(() => exView.z)) === 1.5);
@@ -507,8 +568,8 @@ async function failures() {
     await p.locator(".fr").nth(1).click(); assert(/could not be loaded/.test(await p.textContent("#toast")));
     await p.locator(".fr").first().click(); await p.click("#next");
     assert((await p.textContent("#frameNo")).startsWith("4/"), "Next should skip 2 and 3");
-    await p.click("#blinkBtn"); assert(/1 SKIPPED|2 NOT LOADED, SKIPPED/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
-    await p.click("#blinkBtn");
+    await p.click('[data-mode="blink"]'); assert(/1 SKIPPED|2 NOT LOADED, SKIPPED/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
+    await p.click('[data-mode="normal"]');
   });
   await close(p);
 

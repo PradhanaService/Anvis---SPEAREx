@@ -159,7 +159,7 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   font-size: 10px; letter-spacing: .06em; color: #38bdf8; font-weight: 700; }
 .popnote { grid-column: 1 / -1; font-size: 12px; color: #d0d0d0; }
 
-.cbar { flex: none; min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
+.cbar { flex: none; min-height: 44px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center;
   gap: 8px; padding: 0 10px; border-top: 1px solid rgba(255,255,255,.55); background: #000; }
 .cleft { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
 .cleft .small { color: #d0d0d0; white-space: nowrap; }
@@ -170,6 +170,13 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .seg { display: flex; align-items: center; flex: none; }
 .seglbl { font-size: 10px; color: #999; margin-right: 6px; }
 .seg .md + .md { border-left: 0; }
+.refsel { border: 1px solid rgba(255,255,255,.4); max-width: 150px; }
+/* DIFF legend: the diverging colours (blue – gray – yellow, as in DIVERGING in app.js) and the scale. */
+.difflegend { right: 10px; top: 104px; width: 210px; pointer-events: auto; padding: 6px 8px; background: rgba(0,0,0,.6);
+  border: 1px solid rgba(255,255,255,.25); font-size: 10px; color: #d0d0d0; }
+.dlbar { height: 8px; background: linear-gradient(90deg, #38bdf8, #262626 50%, #ffd23f); border: 1px solid rgba(255,255,255,.2); }
+.dlk { display: flex; justify-content: space-between; gap: 6px; margin-top: 3px; }
+.dls { margin-top: 2px; text-align: center; color: #fff; }
 .cmid { display: flex; align-items: center; gap: 2px; }
 .pb { border-radius: 50%; background: transparent; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .pb.plain { width: 38px; height: 38px; border: 0; }
@@ -232,5 +239,8 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   /* The GAIA label moves under the date label, so it can't run into the credit at the bottom. */
   .gaialbl { left: 8px; right: auto; top: 62px; bottom: auto; max-width: calc(100% - 64px); font-size: 10px; }
   .label { max-width: calc(100% - 66px); }   /* clear of the zoom buttons on the right */
+  .difflegend { width: 168px; font-size: 9px; padding: 4px 6px; }
+  /* BLINK / DIFF label: above the credit, so it doesn't cover the date label at the top. */
+  .modelbl { left: 8px; top: auto; bottom: 62px; transform: none; max-width: calc(100% - 16px); font-size: 10px; }
   .frameedge .rtag { display: none; }   /* no room for it beside the labels; page 1 shows the field size */
 }

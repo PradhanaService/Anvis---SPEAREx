@@ -108,6 +108,11 @@
         <span class="lblt"><b id="shownDate"></b><span class="mono" id="chanShort"></span></span>
       </div>
       <div class="ov modelbl mono" id="modeLabel" hidden></div>
+      <div class="ov difflegend" id="diffLegend" role="img" title="Difference = this image minus the reference. Yellow: appeared or got brighter. Blue: disappeared or got fainter. Gray: no change. Full colour means a change of 5σ or more, where σ is the noise of the difference plus 10% of the object's brightness (so small mismatches on bright constant stars don't light up)." aria-label="Difference colours: yellow means appeared or brighter, blue means disappeared or fainter, gray means no change" hidden>
+        <div class="dlbar"></div>
+        <div class="dlk"><span>gone · fainter</span><span>same</span><span>new · brighter</span></div>
+        <div class="dls mono" id="diffScale"></div>
+      </div>
       <div class="zstack" id="exZoom">
         <button class="zb" type="button" data-zoom="in" aria-label="Zoom in"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10M8 3v10"></path></svg></button>
         <button class="zb" type="button" data-zoom="out" aria-label="Zoom out"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
@@ -147,7 +152,18 @@
             title="Single frames: every SPHEREx image on its own, in time order. Noisier, but shows each exposure and its exact date and wavelength.">FRAMES</button>
         </div>
         <span class="mono small" id="frameNo">0/0</span>
-        <button class="md" type="button" id="blinkBtn" aria-pressed="false">BLINK</button>
+        <div class="seg" id="modeSeg" role="group" aria-label="Mode: normal, blink or difference">
+          <span class="seglbl mono" aria-hidden="true">MODE</span>
+          <button class="md" type="button" data-mode="normal" aria-pressed="true" aria-label="Normal mode"
+            title="Normal: show each image as it is.">NORMAL</button>
+          <button class="md" type="button" data-mode="blink" aria-pressed="false" aria-label="Blink mode"
+            title="Blink: flip quickly between this image and the reference (set in VS). Anything that moved or changed brightness jumps back and forth.">BLINK</button>
+          <button class="md" type="button" data-mode="diff" aria-pressed="false" aria-label="Difference mode"
+            title="Difference: this image minus the reference (set in VS). Things that stayed the same fade to gray; yellow = appeared or got brighter, blue = disappeared or got fainter. A moving star shows as a yellow + blue pair. Works best with Epoch stacks, which have less noise.">DIFF</button>
+        </div>
+        <label class="seglbl mono" for="refSel" id="refLbl" hidden>VS</label>
+        <select id="refSel" class="sel mono refsel" hidden aria-label="Compare with (reference image)"
+          title="What Blink and Difference compare with: the previous date, the first date, or a date you choose."></select>
         <button class="md" type="button" id="gaiaBtn" aria-pressed="false" title="Overlay Gaia DR3 stars (from MAST), moved to each frame's date">GAIA</button>
       </div>
       <div class="cmid">
@@ -170,6 +186,7 @@
   <div role="group" aria-label="Observation dates" class="strip" id="strip"></div>
 </div>
 
+<script src="anvis-math.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
