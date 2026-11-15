@@ -89,7 +89,7 @@ function cubicTaps(n, S) {
 }
 
 // Upsample a w x h frame to OW x OH (bicubic, clamped so stars get no halos) with the stretch applied.
-function drawFrame(w, h, data, lo, hi, invert, OW, OH, linear) {
+function drawFrame(w, h, data, lo, hi, invert, OW, OH) {
   // No-data pixels borrow their nearest valid neighbour for interpolation only; they are still
   // drawn as "no data" below.
   const vals = new Float32Array(w * h), valid = new Uint8Array(w * h);
@@ -125,7 +125,7 @@ function drawFrame(w, h, data, lo, hi, invert, OW, OH, linear) {
       const a = rows[y1 * OW + ox], b = rows[y2 * OW + ox];
       v = Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
       const t = Math.min(1, Math.max(0, (v - lo) / range));
-      let g = Math.round(linear ? 255 * t : (255 * Math.asinh(STRETCH * t)) / STRETCH_NORM);
+      let g = Math.round((255 * Math.asinh(STRETCH * t)) / STRETCH_NORM);
       if (invert) g = 255 - g;
       img.data[p] = img.data[p + 1] = img.data[p + 2] = g; img.data[p + 3] = 255;
     }
@@ -209,12 +209,9 @@ class SkyView {
     const newGeom = !this.field || this.field.nx !== cut.width || this.field.ny !== cut.height;
     this.field = { nx: cut.width, ny: cut.height, scale: cut.pixel_scale_arcsec || 6.15, ra, dec };
     if (newGeom) { this.z = 1; this.tx = 0; this.ty = 0; }
-    let lo = display.lo, hi = display.hi;
-    if (lo === undefined) {
-      const finite = cut.data.filter((v) => v !== null).sort((a, b) => a - b);
-      lo = percentile(finite, display.minb); hi = percentile(finite, display.maxb);
-    }
-    if (hi <= lo) hi = lo + 1e-6;
+    const finite = cut.data.filter((v) => v !== null).sort((a, b) => a - b);
+    const lo = percentile(finite, display.minb);
+    let hi = percentile(finite, display.maxb); if (hi <= lo) hi = lo + 1e-6;
     // Render at about the box's device resolution (capped for speed); zoom scales this picture.
     const r = this.rect(), dpr = Math.min(2, window.devicePixelRatio || 1);
     let f = Math.max(1, Math.min(r.width * dpr / cut.width, r.height * dpr / cut.height) || 1);
@@ -222,7 +219,7 @@ class SkyView {
     const OW = Math.max(cut.width, Math.round(cut.width * f)), OH = Math.max(cut.height, Math.round(cut.height * f));
     if (!this.off) this.off = document.createElement("canvas");
     this.off.width = OW; this.off.height = OH;
-    this.off.getContext("2d").putImageData(drawFrame(cut.width, cut.height, cut.data, lo, hi, display.invert, OW, OH, display.linear), 0, 0);
+    this.off.getContext("2d").putImageData(drawFrame(cut.width, cut.height, cut.data, lo, hi, display.invert, OW, OH), 0, 0);
     this.hasImage = true;
     this.fitClamp(); this.draw();
   }
@@ -507,7 +504,7 @@ PRESETS.forEach((t) => {
 const ex = {
   target: null, name: "", band: "", h: 0, w: 0,
   frames: [], current: 0, timer: null, playing: false, speedIdx: 2,
-  blink: false, blinkAlt: false, blinkTimer: null, diff: false,
+  blink: false, blinkAlt: false, blinkTimer: null,
   pick: null, popAt: null,          // clicked field pixel, and where the click was on screen
   searchId: 0, listTotal: 0, done: 0, failed: 0, finished: false,
 };
@@ -526,7 +523,7 @@ function toast(msg) {
 }
 
 async function openExplore(c) {
-  stop(); stopBlink(); ex.diff = false;
+  stop(); stopBlink();
   $("pick").hidden = true; $("explore").hidden = false;
   window.scrollTo(0, 0);
 
@@ -539,7 +536,7 @@ async function openExplore(c) {
   $("pop").hidden = true; $("noObs").hidden = true;
   exView.field = null; exView.clearImage();
   exLoading("Retrieving SPHEREx observations…");
-  renderInfo(); renderBar();
+  renderBar();
 
   let list;
   try { list = await getJSON(framesURL(c.ra, c.dec, ex.band)); }
@@ -558,7 +555,7 @@ async function openExplore(c) {
     exLoading("");
     $("noObsTitle").textContent = "No SPHEREx observations found";
     $("noObsText").textContent = "Nothing is available for these coordinates in the selected band. Go back and try another position or band.";
-    $("noObs").hidden = false; renderInfo(); return;
+    $("noObs").hidden = false; return;
   }
   if (all.length > MAX_FRAMES) {
     const step = all.length / MAX_FRAMES;
@@ -566,7 +563,7 @@ async function openExplore(c) {
   }
   ex.frames = all.map((f) => ({ ...f, cut: null, failed: false }));
   exLoading(`Retrieving SPHEREx observations… 0 of ${ex.frames.length}`);
-  buildStrip(); renderInfo(); renderBar();
+  buildStrip(); renderBar();
 
   // All cutouts in one streamed request (the server fetches several from IRSA at once);
   // failed frames get one more try.
@@ -574,11 +571,11 @@ async function openExplore(c) {
     if (frame) { f.cut = frame; if (f.failed) { f.failed = false; ex.failed--; } ex.done++; }
     else if (!f.failed) { f.failed = true; ex.failed++; }
     const i = ex.frames.indexOf(f);
-    renderInfo(); updateChip(i);
+    updateChip(i);
     if (!exView.hasImage && frame && i === ex.current) exLoading("");
     else if (!exView.hasImage) exLoading(`Retrieving SPHEREx observations… ${ex.done} of ${ex.frames.length}`);
-    // An earlier frame arriving can change what BLINK / DIFF compare against.
-    if (i === ex.current || ((ex.diff || ex.blink) && i < ex.current)) showFrame();
+    // An earlier frame arriving can change what BLINK compares against.
+    if (i === ex.current || (ex.blink && i < ex.current)) showFrame();
   };
   for (let pass = 0; pass < 2 && id === ex.searchId; pass++) {
     const batch = pass === 0 ? ex.frames.slice() : ex.frames.filter((f) => f.failed);
@@ -591,7 +588,7 @@ async function openExplore(c) {
     batch.forEach((f, i) => { if (!got.has(i)) received(f, null); });
   }
   if (id !== ex.searchId) return;
-  ex.finished = true; renderInfo();
+  ex.finished = true;
   if (!ex.frames[ex.current].cut) { const first = ex.frames.findIndex((f) => f.cut); if (first >= 0) go(first); }
   if (!ex.frames.some((f) => f.cut)) {
     exLoading("");
@@ -599,16 +596,6 @@ async function openExplore(c) {
     $("noObsText").textContent = "IRSA did not return any of the images. It may be busy; go back and try again.";
     $("noObs").hidden = false;
   }
-}
-
-function renderInfo() {
-  const c = ex.target; if (!c) return;
-  let s = `${ex.name} · ${fmtRA(c.ra)} ${fmtDec(c.dec)} · ${bandShort(ex.band)} (${BANDS[ex.band]}) · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
-  if (ex.frames.length) {
-    s += ` · ${ex.listTotal} observations` + (ex.listTotal > ex.frames.length ? ` (showing ${ex.frames.length})` : "");
-    s += ex.finished ? (ex.failed ? ` · ${ex.failed} not loaded` : "") : ` · loading ${ex.done}/${ex.frames.length}`;
-  }
-  $("regionInfo").textContent = s + " · data: NASA/IPAC IRSA · not an official NASA site";
 }
 
 // ---- date strip
@@ -665,19 +652,10 @@ function showFrame() {
   $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
     `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
 
-  const ri = refIndex(), prev = ex.frames[ri];
-  if (ex.diff && f.cut && ri >= 0) {
-    // Difference image: this observation minus the previous one, on a symmetric linear scale.
-    const data = f.cut.data.map((v, i) => (v === null || prev.cut.data[i] === null ? null : v - prev.cut.data[i]));
-    const mags = data.filter((v) => v !== null).map(Math.abs).sort((a, b) => a - b);
-    const m = percentile(mags, 99.5) || 1e-6;
-    exView.setImage({ ...f.cut, data }, ex.target.ra, ex.target.dec, { lo: -m, hi: m, invert: false, linear: true });
-    ex.diffData = data;
-  } else if (shown.cut) {
+  if (shown.cut) {
     exView.setImage(shown.cut, ex.target.ra, ex.target.dec, DISPLAY);
-    ex.diffData = null;
   } else {
-    exView.clearImage(); ex.diffData = null;
+    exView.clearImage();
     if (!$("explore").hidden && ex.frames.length) exLoading(shown.failed ? "" : "Retrieving this observation…");
   }
   if (exView.hasImage) exLoading("");
@@ -686,7 +664,7 @@ function showFrame() {
 
 function renderMode() {
   const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
-  lbl.hidden = !(ex.blink || ex.diff);
+  lbl.hidden = !ex.blink;
   if (!f) return;
   const day = (x) => shortDate(x.date).day;
   const skipped = ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
@@ -694,13 +672,6 @@ function renderMode() {
     lbl.textContent = !f.cut ? "BLINK · THIS OBSERVATION IS NOT LOADED"
       : p ? `BLINK · ${day(p)} ↔ ${day(f)} · NOW ${day(ex.frames[shownIndex()])}${skipped}`
       : "BLINK · NO EARLIER LOADED OBSERVATION";
-  } else if (ex.diff) {
-    if (!f.cut) lbl.textContent = "DIFFERENCE · THIS OBSERVATION IS NOT LOADED";
-    else if (!p) lbl.textContent = "DIFFERENCE UNAVAILABLE · NO EARLIER LOADED OBSERVATION · SHOWING THIS ONE";
-    else {
-      const wl = (x) => (x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
-      lbl.textContent = `DIFFERENCE · ${day(f)} − ${day(p)} · λ ${wl(f)} vs ${wl(p)} µm${skipped}`;
-    }
   }
 }
 
@@ -725,16 +696,14 @@ function renderPop() {
   const fld = exView.field, c = pixToSky(fld, ex.pick.ix, ex.pick.iy);
   const di = shownIndex(), f = ex.frames[di], d = shortDate(f.date);
   const px = Math.min(fld.nx - 1, Math.floor(ex.pick.ix)), py = Math.min(fld.ny - 1, Math.floor(ex.pick.iy));
-  const isDiff = !!ex.diffData;
-  const val = isDiff ? ex.diffData[py * fld.nx + px] : f.cut ? f.cut.data[py * f.cut.width + px] : undefined;
+  const val = f.cut ? f.cut.data[py * f.cut.width + px] : undefined;
   const de = -(ex.pick.ix - fld.nx / 2) * fld.scale, dn = (fld.ny / 2 - ex.pick.iy) * fld.scale;
   const off = Math.hypot(de, dn), pa = ((Math.atan2(de, dn) * 180 / Math.PI) + 360) % 360;
   $("popId").textContent = `${fmtRA(c.ra)} ${fmtDec(c.dec)}`;
   const rows = [
     prow("RA", esc(fmtRA(c.ra))),
     prow("Dec", esc(fmtDec(c.dec))),
-    prow(isDiff ? "Change vs previous" : "Brightness",
-      val === undefined ? "—" : val === null ? "no data" : `${isDiff && val > 0 ? "+" : ""}${val.toFixed(3)} MJy/sr`, val === null),
+    prow("Brightness", val === undefined ? "—" : val === null ? "no data" : `${val.toFixed(3)} MJy/sr`, val === null),
     prow("Observed", esc(`${d.day} ${d.year} · ${d.time} UTC`)),
     prow("Wavelength", f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
     prow("Band", esc(`${bandShort(ex.band)} · ${BANDS[ex.band]}`)),
@@ -798,18 +767,11 @@ function stepFrame(dir) {
 function renderBar() {
   const n = ex.frames.length, k = ex.current;
   $("frameNo").textContent = n ? `${shownIndex() + 1}/${n}` : "0/0";
-  const f = ex.frames[shownIndex()], q = f && f.cut ? f.cut.quality || [] : [];
-  const chip = $("flagChip");
-  chip.textContent = !f || !f.cut ? (f && f.failed ? "NOT LOADED" : "—") : q.length ? q.map((x) => x.name).join(" · ") : "QUALITY OK";
-  chip.classList.toggle("bad", q.length > 0 || !!(f && f.failed));
-  chip.title = q.length ? "SPHEREx quality flags within 1 pixel of the target: " + q.map((x) => `${x.name} (${x.desc})`).join("; ")
-                        : "No SPHEREx quality flags within 1 pixel of the target";
   $("prev").setAttribute("aria-disabled", String(!n || nextLoadable(k, -1) < 0));
   $("next").setAttribute("aria-disabled", String(!n || nextLoadable(k, 1) < 0));
   $("play").classList.toggle("on", ex.playing); $("play").setAttribute("aria-pressed", String(ex.playing));
   $("pause").setAttribute("aria-pressed", String(!ex.playing));
   $("blinkBtn").setAttribute("aria-pressed", String(ex.blink));
-  $("diffBtn").setAttribute("aria-pressed", String(ex.diff));
   $("speedSel").value = String(ex.speedIdx);
 }
 SPEED_LIST.forEach((s, i) => { const o = document.createElement("option"); o.value = i; o.textContent = speedLabel(s); $("speedSel").appendChild(o); });
@@ -826,11 +788,10 @@ $("pause").addEventListener("click", stop);
 function stopBlink() { clearInterval(ex.blinkTimer); ex.blink = false; ex.blinkAlt = false; }
 $("blinkBtn").addEventListener("click", () => {
   if (ex.blink) { stopBlink(); showFrame(); return; }
-  ex.diff = false; ex.blink = true; ex.blinkAlt = false;
+  ex.blink = true; ex.blinkAlt = false;
   ex.blinkTimer = setInterval(() => { ex.blinkAlt = !ex.blinkAlt; showFrame(); }, BLINK_MS);
   showFrame();
 });
-$("diffBtn").addEventListener("click", () => { stopBlink(); ex.diff = !ex.diff; showFrame(); });
 
 // ---- GAIA: Gaia DR3 stars from MAST, moved to each frame's date
 // Gaia positions are for epoch 2016.0; each star is moved by its proper motion to the date of the
