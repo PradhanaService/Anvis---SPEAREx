@@ -85,19 +85,31 @@ function cubicTaps(n, S) {
 // the normal stretch, so small changes are still visible.
 const DIVERGING = { neg: [56, 189, 248], mid: [38, 38, 38], pos: [255, 210, 63], stretch: 3 };
 
+// A no-data pixel whose borrowed neighbour is at least this far up the brightness range (0–1)
+// is taken to be a saturated star core.
+const SATURATED_LEVEL = 0.85;
+
 // Upsample a w x h frame to OW x OH (bicubic, clamped so stars get no halos) with the stretch applied.
 // cmap (optional): DIVERGING, drawn symmetric about the middle of lo..hi instead of in grays.
 function drawFrame(w, h, data, lo, hi, invert, OW, OH, cmap) {
-  // No-data pixels borrow their nearest valid neighbour for interpolation only; they are still
-  // drawn as "no data" below.
+  // No-data pixels borrow their nearest valid neighbour (up to 8 pixels in) for interpolation.
+  // They are drawn as "no data" below – except inside a bright star: a saturated star core has
+  // no valid pixels (the detector overflowed), and is drawn bright like the rest of the star.
   const vals = new Float32Array(w * h), valid = new Uint8Array(w * h);
   for (let i = 0; i < data.length; i++) { valid[i] = data[i] !== null ? 1 : 0; vals[i] = valid[i] ? data[i] : lo; }
-  for (let pass = 0; pass < 3; pass++) {
+  // Each pass fills the missing pixels next to a known one (measured or filled in an earlier
+  // pass), so the fill grows one pixel inwards per pass.
+  const known = valid.slice();
+  for (let pass = 0; pass < 8; pass++) {
+    const next = known.slice();
+    let grew = false;
     for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-      const i = y * w + x; if (valid[i]) continue;
-      const nb = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].find(([a, b]) => a >= 0 && b >= 0 && a < w && b < h && valid[b * w + a]);
-      if (nb) vals[i] = vals[nb[1] * w + nb[0]];
+      const i = y * w + x; if (known[i]) continue;
+      const nb = [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]].find(([a, b]) => a >= 0 && b >= 0 && a < w && b < h && known[b * w + a]);
+      if (nb) { vals[i] = vals[nb[1] * w + nb[0]]; next[i] = 1; grew = true; }
     }
+    known.set(next);
+    if (!grew) break;
   }
   const tx = cubicTaps(w, OW), ty = cubicTaps(h, OH);
   const rows = new Float32Array(h * OW);
@@ -117,11 +129,15 @@ function drawFrame(w, h, data, lo, hi, invert, OW, OH, cmap) {
       const fx = Math.min(1, Math.max(0, ((ox + 0.5) * w) / OW - 0.5 - x1));
       const cover = (valid[y1 * w + x1] * (1 - fx) + valid[y1 * w + x2] * fx) * (1 - fy) +
                     (valid[y2 * w + x1] * (1 - fx) + valid[y2 * w + x2] * fx) * fy;
-      if (cover < 0.5) { img.data[p] = 70; img.data[p + 1] = 40; img.data[p + 2] = 40; img.data[p + 3] = 255; continue; } // no data
       let v = 0;
       for (let k = 0; k < 4; k++) v += rows[ty.idx[oy * 4 + k] * OW + ox] * ty.wts[oy * 4 + k];
       const a = rows[y1 * OW + ox], b = rows[y2 * OW + ox];
       v = Math.min(Math.max(v, Math.min(a, b)), Math.max(a, b));
+      // No data: dark brown, unless it is the saturated middle of a bright star (surrounded by
+      // pixels at the top of the brightness range), which is drawn like the star around it.
+      if (cover < 0.5 && (cmap || (v - lo) / range < SATURATED_LEVEL)) {
+        img.data[p] = 70; img.data[p + 1] = 40; img.data[p + 2] = 40; img.data[p + 3] = 255; continue;
+      }
       if (cmap) {
         const t = Math.min(1, Math.max(-1, (2 * (v - lo)) / range - 1)), end = t < 0 ? cmap.neg : cmap.pos;
         const a = Math.asinh(cmap.stretch * Math.abs(t)) / Math.asinh(cmap.stretch);
