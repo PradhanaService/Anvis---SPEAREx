@@ -238,18 +238,7 @@ class SkyView {
     }
     const zp = this.zoomScope.querySelector(".zpct");
     if (zp) zp.textContent = Math.round(this.z * 100) + "%";
-    this.drawScale();
     this.onChange && this.onChange();
-  }
-  // Scale bar: the largest "nice" angle that fits in ~20% of the box width.
-  drawScale() {
-    const bar = this.box.querySelector(".scalebar"), lbl = this.box.querySelector(".scalelbl");
-    if (!this.field) { bar.style.width = "0"; lbl.textContent = ""; return; }
-    const pxPerArcsec = this.k() / this.field.scale, maxPx = this.rect().width * 0.2;
-    const nice = [3600, 1800, 1200, 600, 300, 120, 60, 30, 20, 10, 5, 2, 1];
-    const a = nice.find((x) => x * pxPerArcsec <= maxPx) || 1;
-    bar.style.width = (a * pxPerArcsec).toFixed(1) + "px";
-    lbl.textContent = a >= 3600 ? `${a / 3600}°` : a >= 60 ? `${a / 60}′` : `${a}″`;
   }
   // Position an overlay element (absolutely positioned, zero-size anchor) at a sky position.
   place(el, ix, iy) {

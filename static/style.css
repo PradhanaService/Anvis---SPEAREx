@@ -77,9 +77,6 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .lblt { display: flex; flex-direction: column; gap: 1px; }
 .lblt b { font-size: 13px; font-weight: 700; }
 .lblt span { font-size: 11px; color: #d0d0d0; }
-.scale { right: 12px; bottom: 10px; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
-.scalebar { min-width: 4px; height: 6px; border: 1px solid #fff; border-top: 0; }
-.scalelbl { font-family: 'DM Mono', monospace; font-size: 11px; }
 .hintbar { left: 10px; bottom: 10px; padding: 4px 8px; background: rgba(0,0,0,.6); color: #d0d0d0; font-size: 11px;
   pointer-events: auto; max-width: calc(100% - 120px); }
 .hintbar a, .credit a { color: #d0d0d0; }
@@ -152,7 +149,7 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 
 /* Gaia overlay */
 .sky canvas.gaiacv { pointer-events: none; }
-.gaialbl { right: 12px; bottom: 34px; padding: 3px 8px; background: rgba(0,0,0,.6); color: #d0d0d0; font-size: 11px;
+.gaialbl { right: 12px; bottom: 10px; padding: 3px 8px; background: rgba(0,0,0,.6); color: #d0d0d0; font-size: 11px;
   border-left: 3px solid #38bdf8; max-width: calc(100% - 140px); }
 .prow.wide { grid-column: 1 / -1; }
 .popsec { grid-column: 1 / -1; margin-top: 2px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.2);
