@@ -355,3 +355,9 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .tgtring i:nth-child(1) { top: -11px; } .tgtring i:nth-child(2) { bottom: -11px; }
 .tgtring i:nth-child(3), .tgtring i:nth-child(4) { top: 50%; width: 9px; height: 2px; margin-top: -1px; }
 .tgtring i:nth-child(3) { left: -11px; } .tgtring i:nth-child(4) { right: -11px; }
+
+/* Backdrop hint on the sky grid; fades out on the first click, drag or typing. */
+.mapnote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center;
+  font-size: clamp(14px, 2.2vw, 22px); font-weight: 600; color: rgba(255,255,255,.28); pointer-events: none;
+  transition: opacity .6s ease; }
+.mapnote.gone { opacity: 0; }

@@ -72,10 +72,11 @@
     <!-- The whole sky as a plain coordinate grid (lines only). A click only chooses the spot
          (fills RA / Dec); Search then fetches the SPHEREx frames there. -->
     <div id="pvMap" class="sky skymap" tabindex="0" role="application"
-      aria-label="Map of the whole sky. Hover to read Right Ascension and Declination, click to choose a spot, then press Search. Scroll to zoom, drag to move.">
+      aria-label="Map of the whole sky. Hover to read Right Ascension and Declination; click to choose a spot, or drag to select an area; then press Search. Scroll to zoom.">
       <canvas></canvas>
       <div class="cross-h" hidden></div><div class="cross-v" hidden></div>
       <div class="hovertag" hidden></div>
+      <div class="mapnote" id="mapNote" aria-hidden="true">Drag on the sky to find coordinates, or enter them manually</div>
     </div>
 
   </section>

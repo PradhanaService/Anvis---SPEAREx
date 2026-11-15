@@ -68,6 +68,7 @@ async function page1() {
   // under the slider may ask for the list of frames of a chosen spot: that is a small text reply.)
   const images = []; p.on("request", (r) => { if (/\/api\/(cutout|cutouts|stack)\b/.test(r.url())) images.push(r.url()); });
   await check("P1 starts on an empty sky grid (black, lines only)", async () => {
+    assert(/Drag on the sky to find coordinates, or enter them manually/.test(await p.textContent("#mapNote")));
     assert(await p.isVisible("#pvMap"));
     assert((await p.inputValue("#ra")) === "" && (await p.inputValue("#dec")) === "");
     assert((await p.locator("#pvMap .ov, #pvMap button, #pvMap img").count()) === 0, "no text or buttons on the grid");
@@ -95,14 +96,18 @@ async function page1() {
     assert(!images.length, "images downloaded before Search: " + images.join());
     assert(await p.isVisible("#pick"), "a click must not search");
   });
-  await check("P1 grid: scroll zooms and drag moves, without changing the chosen spot", async () => {
-    const ra = await p.inputValue("#ra"), z0 = await p.evaluate(() => map.z);
-    await p.mouse.move(mp.x + mp.width / 2, mp.y + mp.height / 2); await p.mouse.wheel(0, -300); await p.waitForTimeout(150);
+  await check("P1 grid: scroll zooms; drag selects an area (RA, Dec, field height) and fades the hint", async () => {
+    const z0 = await p.evaluate(() => map.z);
+    for (let k = 0; k < 8; k++) { await p.mouse.move(mp.x + mp.width / 2, mp.y + mp.height / 2); await p.mouse.wheel(0, -400); await p.waitForTimeout(60); }
     assert((await p.evaluate(() => map.z)) > z0, "wheel did not zoom");
-    const c0 = await p.evaluate(() => map.ra0);
-    await p.mouse.down(); await p.mouse.move(mp.x + mp.width / 2 - 120, mp.y + mp.height / 2 - 40, { steps: 6 }); await p.mouse.up();
-    assert((await p.evaluate(() => map.ra0)) !== c0, "drag did not move");
-    assert((await p.inputValue("#ra")) === ra, "drag must not change the chosen spot");
+    const want = await p.evaluate(() => { const { W, H } = mapSize(), t = mapSky(W * 0.45, H * 0.45), b = mapSky(W * 0.55, H * 0.55);
+      return { ra: (t.ra + b.ra) / 2, dec: (t.dec + b.dec) / 2, h: Math.max(1, Math.min(30, Math.round(Math.abs(t.dec - b.dec) * 60))) }; });
+    await p.mouse.move(mp.x + mp.width * 0.45, mp.y + mp.height * 0.45); await p.mouse.down();
+    await p.mouse.move(mp.x + mp.width * 0.55, mp.y + mp.height * 0.55, { steps: 8 }); await p.mouse.up();
+    assert(near(parseFloat(await p.inputValue("#ra")), want.ra, 0.01) && near(parseFloat(await p.inputValue("#dec")), want.dec, 0.01));
+    assert(Number(await p.inputValue("#size")) === want.h, "field height from the area");
+    assert(await p.evaluate(() => document.getElementById("mapNote").classList.contains("gone")), "hint faded");
+    await p.fill("#size", "4"); await p.dispatchEvent("#size", "input");
   });
   await pickBarnard(p);
   await check("P1 typing a position: hints, preset recognised, the grid centres on it – still nothing downloaded", async () => {

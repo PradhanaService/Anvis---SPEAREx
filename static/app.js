@@ -455,17 +455,40 @@ function drawMap() {
   c.fillStyle = "#000"; c.fillRect(0, 0, W, H);
   const a = mapXY(360, 90), b = mapXY(0, -90);
   c.lineWidth = 1;
-  // Grid lines only: the finest step that keeps lines at least ~60 px apart.
-  const steps = [30, 15, 10, 5, 2, 1, 0.5, 0.25, 0.1];
-  const raStep = steps.filter((d) => d * s >= 60).pop() || 30, decStep = steps.filter((d) => d * s >= 60).pop() || 30;
-  c.strokeStyle = "rgba(255,255,255,.16)";
+  // A light, sparse grid (lines at least ~120 px apart) with small degree labels on the edges.
+  const steps = [60, 30, 15, 10, 5, 2, 1, 0.5, 0.25, 0.1];
+  const raStep = steps.filter((d) => d * s >= 120).pop() || 60, decStep = steps.filter((d) => d * s >= 120).pop() || 60;
+  const top = Math.max(0, a.y), bottom = Math.min(H, b.y), left = Math.max(0, a.x), right = Math.min(W, b.x);
+  const deg = (v) => `${+v.toFixed(2)}°`;
+  c.strokeStyle = "rgba(255,255,255,.10)"; c.fillStyle = "rgba(255,255,255,.45)"; c.font = "10px 'DM Mono', monospace";
+  c.textBaseline = "bottom"; c.textAlign = "center";
   for (let ra = 0; ra <= 360 + 1e-9; ra += raStep) {
     const x = mapXY(ra, 0).x; if (x < a.x - 1 || x > b.x + 1) continue;
-    c.beginPath(); c.moveTo(x, Math.max(0, a.y)); c.lineTo(x, Math.min(H, b.y)); c.stroke();
+    c.beginPath(); c.moveTo(x, top); c.lineTo(x, bottom); c.stroke();
+    if (x > left + 30 && x < right - 20) c.fillText(deg(ra), x, bottom - 3);          // RA along the bottom edge
   }
-  for (let dec = -90; dec <= 90 + 1e-9; dec += decStep) {
+  c.textBaseline = "middle"; c.textAlign = "left";
+  for (let dec = Math.ceil(-90 / decStep) * decStep; dec <= 90 + 1e-9; dec += decStep) {   // round values, incl. 0°
     const y = mapXY(0, dec).y; if (y < a.y - 1 || y > b.y + 1) continue;
-    c.beginPath(); c.moveTo(Math.max(0, a.x), y); c.lineTo(Math.min(W, b.x), y); c.stroke();
+    c.beginPath(); c.moveTo(left, y); c.lineTo(right, y); c.stroke();
+    if (y > top + 8 && y < bottom - 16) c.fillText((dec > 0 ? "+" : "") + deg(dec), left + 4, y - 7);   // Dec along the left edge
+  }
+  c.textAlign = "start"; c.textBaseline = "alphabetic";
+  // While dragging: the area being selected.
+  const sel = map.drag && map.drag.moved && map.drag.end;
+  if (sel) {
+    c.setLineDash([5, 4]); c.strokeStyle = "#ffd23f"; c.lineWidth = 1.5;
+    c.strokeRect(sel.x0, sel.y0, sel.x1 - sel.x0, sel.y1 - sel.y0); c.setLineDash([]);
+  }
+  // The dashed field box: the area Search will fetch (field height × width) around the chosen spot.
+  const fh = heightArcsec();
+  if (pk.pick && fh && !sel) {
+    const hd = fh / 3600 / 2, wd = exploreWidth(fh) / 3600 / 2 / Math.max(0.05, Math.cos((pk.pick.dec * Math.PI) / 180));
+    const p0 = mapXY(pk.pick.ra + wd, pk.pick.dec + hd), p1 = mapXY(pk.pick.ra - wd, pk.pick.dec - hd);
+    if (p1.x - p0.x >= 6) {
+      c.setLineDash([5, 4]); c.strokeStyle = "#ffd23f"; c.lineWidth = 1.5;
+      c.strokeRect(p0.x, p0.y, p1.x - p0.x, p1.y - p0.y); c.setLineDash([]);
+    }
   }
   if (pk.pick) {
     const p = mapXY(pk.pick.ra, pk.pick.dec);
@@ -493,23 +516,38 @@ function mapZoomAt(x, y, z) {
 const mapLocal = (e) => { const r = mapSize().r; return { x: e.clientX - r.left, y: e.clientY - r.top }; };
 mapBox.addEventListener("pointerdown", (e) => {
   if (e.button !== 0 || e.target.closest("button")) return;
-  map.drag = { x: e.clientX, y: e.clientY, ra0: map.ra0, dec0: map.dec0, moved: false };
+  map.drag = { x: e.clientX, y: e.clientY, moved: false };
   mapBox.setPointerCapture(e.pointerId);
 });
 mapBox.addEventListener("pointermove", (e) => {
   const d = map.drag, p = mapLocal(e);
   if (d) {
     if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) { d.moved = true; mapBox.classList.add("dragging"); }
-    if (d.moved) { const s = mapScale(); map.ra0 = d.ra0 + (e.clientX - d.x) / s; map.dec0 = d.dec0 + (e.clientY - d.y) / s; drawMap(); }
+    if (d.moved) {   // dragging selects an area (the box drawn by drawMap)
+      const a = mapLocal({ clientX: d.x, clientY: d.y });
+      d.end = { x0: Math.min(a.x, p.x), y0: Math.min(a.y, p.y), x1: Math.max(a.x, p.x), y1: Math.max(a.y, p.y) };
+      hideMapNote(); drawMap();
+    }
   }
   mapHover(d && d.moved ? null : p.x, p.y);
 });
 mapBox.addEventListener("pointerup", (e) => {
   const d = map.drag; map.drag = null; mapBox.classList.remove("dragging");
-  if (!d || d.moved) return;
+  if (!d) return;
+  hideMapNote(); mapHover(null);
+  if (d.moved && d.end) {
+    // An area: its centre is the position; its height sets the field height (1′–30′).
+    const t = mapSky(d.end.x0, d.end.y0), b = mapSky(d.end.x1, d.end.y1);
+    const q = { ra: (t.ra + b.ra) / 2, dec: Math.max(-90, Math.min(90, (t.dec + b.dec) / 2)) };
+    if (!onSky(q)) { drawMap(); return; }
+    const arcmin = Math.round(Math.abs(t.dec - b.dec) * 60);
+    $("size").value = Math.max(1, Math.min(MAX_HEIGHT_ARCMIN, arcmin));
+    $("size").dispatchEvent(new Event("input"));
+    setPick(q, true);
+    return;
+  }
   const p = mapLocal(e), q = mapSky(p.x, p.y);
   if (!onSky(q)) return;
-  mapHover(null);
   setPick(q, true);        // only chooses the spot; Search fetches the frames
 });
 mapBox.addEventListener("pointerleave", () => { map.drag = null; mapBox.classList.remove("dragging"); mapHover(null); });
@@ -517,6 +555,9 @@ mapBox.addEventListener("wheel", (e) => { e.preventDefault(); const p = mapLocal
 new ResizeObserver(() => drawMap()).observe(mapBox);
 // Centre the grid on a position (kept within the sky).
 function centreMap(c) { map.ra0 = c.ra; map.dec0 = c.dec; drawMap(); }
+// The backdrop hint on the grid fades out for good on the first click, drag or typing.
+function hideMapNote() { $("mapNote").classList.add("gone"); }
+["ra", "dec"].forEach((id) => $(id).addEventListener("input", hideMapNote));
 
 function runSearch() {      // returns true when the search starts
   const c = typedPosition(true);
