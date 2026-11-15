@@ -79,3 +79,58 @@ def test_diff_keeps_no_data_and_rejects_different_grids():
     assert d["data"][1] is None and d["change"][1] is None
     with pytest.raises(subprocess.CalledProcessError):
         js("m.diffImage(a, b)", a=cut([[1.0, 2.0]]), b=cut([[1.0], [2.0]]))
+
+
+# ----------------------------------------------------------------------------- photometry
+def _star_field(flux_mjy, sky=0.3, size=31, sigma_px=0.9, noise=0.0, seed=5):
+    """A star of known total flux (mJy) at the field centre on a flat sky (MJy/sr)."""
+    rng = np.random.default_rng(seed)
+    yy, xx = np.mgrid[0:size, 0:size] + 0.5
+    k = js("m.MJY_PER_MJYSR_PIXEL")
+    psf = np.exp(-((xx - size / 2) ** 2 + (yy - size / 2) ** 2) / (2 * sigma_px ** 2))
+    psf /= psf.sum()
+    return sky + flux_mjy / k * psf + rng.normal(0, noise, (size, size)) if noise else sky + flux_mjy / k * psf
+
+
+def test_pixel_solid_angle_conversion():
+    # One 6.15" pixel is 8.89e-10 sr, so 1 MJy/sr over it is 0.889 mJy.
+    assert js("m.MJY_PER_MJYSR_PIXEL") == pytest.approx(0.889, abs=0.001)
+
+
+def test_aperture_photometry_recovers_flux_and_removes_sky():
+    img = _star_field(50.0, sky=0.3)
+    p = js("m.aperturePhotometry(c, 15.5, 15.5)", c=cut(img))
+    # An aperture flux: the 13 pixels within r = 2 px hold this share of the star's light.
+    yy, xx = np.mgrid[0:31, 0:31] + 0.5
+    inside = np.hypot(xx - 15.5, yy - 15.5) <= 2
+    share = (_star_field(50.0, sky=0.0)[inside]).sum() * js("m.MJY_PER_MJYSR_PIXEL") / 50.0
+    assert 0.85 < share < 0.95
+    assert p["flux"] == pytest.approx(50.0 * share, rel=1e-6)
+    assert p["sky"] == pytest.approx(0.3, abs=1e-6) and p["nbad"] == 0 and p["npix"] == 13
+
+
+def test_aperture_photometry_error_and_changes():
+    a = js("m.aperturePhotometry(c, 15.5, 15.5)", c=cut(_star_field(20.0, noise=0.05, seed=6)))
+    b = js("m.aperturePhotometry(c, 15.5, 15.5)", c=cut(_star_field(30.0, noise=0.05, seed=7)))
+    assert a["err"] > 0 and b["flux"] - a["flux"] == pytest.approx(10.0, abs=5 * a["err"] + 0.5)
+
+
+def test_aperture_photometry_counts_missing_pixels_and_needs_sky():
+    img = _star_field(50.0)
+    img[15, 15] = np.nan
+    p = js("m.aperturePhotometry(c, 15.5, 15.5)", c=cut(img))
+    assert p["nbad"] == 1 and p["npix"] == 12
+    assert js("m.aperturePhotometry(c, 1.5, 1.5)", c=cut(np.ones((3, 3)))) is None   # no room for a sky ring
+
+
+def test_core_hole_and_ring_photometry_for_saturated_stars():
+    img = _star_field(500.0, sigma_px=2.5)
+    yy, xx = np.mgrid[0:31, 0:31] + 0.5
+    hole = np.hypot(xx - 15.5, yy - 15.5) <= 2.2
+    img[hole] = np.nan                                           # a saturated core: no data
+    assert js("m.coreHoleRadius(c, 15.5, 15.5)", c=cut(img)) == pytest.approx(2.0)          # the farthest no-data pixel centre
+    assert js("m.coreHoleRadius(c, 15.5, 15.5)", c=cut(_star_field(5.0))) == 0
+    ap = {"r0": 3.5, "r": 6.5, "rin": 8.5, "rout": 12.5}
+    ring = js("m.aperturePhotometry(c, 15.5, 15.5, ap)", c=cut(img), ap=ap)
+    brighter = js("m.aperturePhotometry(c, 15.5, 15.5, ap)", c=cut(np.where(hole, np.nan, _star_field(1000.0, sigma_px=2.5))), ap=ap)
+    assert ring["nbad"] == 0 and brighter["flux"] == pytest.approx(2 * ring["flux"], rel=0.02)   # the halo scales with the star

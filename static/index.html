@@ -135,6 +135,16 @@
         </div>
       </div>
 
+      <section class="curve" id="curve" aria-label="Light curve of the target" hidden>
+        <div class="cvhead">
+          <span class="mono cvtitle" id="curveTitle">TARGET BRIGHTNESS · mJy</span>
+          <span class="mono cvnote" id="curveNote"></span>
+          <button class="cx" type="button" id="curveClose" aria-label="Hide the light curve"><svg width="11" height="11" viewBox="0 0 14 14" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 3l8 8M11 3l-8 8"></path></svg></button>
+        </div>
+        <svg id="curveSvg" class="cvsvg" role="img" tabindex="0" aria-label="Light curve of the target"></svg>
+        <div class="cvkey mono" id="curveKey"></div>
+      </section>
+
       <div class="loading" id="exLoading" role="status" hidden><span class="spin"></span><span id="exLoadingText">Retrieving SPHEREx observations…</span></div>
       <div class="noobs" id="noObs" role="status" hidden>
         <strong id="noObsTitle">No SPHEREx observations found</strong>
@@ -164,7 +174,11 @@
         <label class="seglbl mono" for="refSel" id="refLbl" hidden>VS</label>
         <select id="refSel" class="sel mono refsel" hidden aria-label="Compare with (reference image)"
           title="What Blink and Difference compare with: the previous date, the first date, or a date you choose."></select>
+        <button class="md" type="button" id="lockBtn" aria-pressed="true" aria-label="Lock brightness scale"
+          title="Lock brightness scale: show every image with the same brightness scale (from the reference in VS, or the first image), so a star that gets brighter or fainter really looks brighter or fainter. Off: each image gets its own best contrast. On by default for Epoch stacks.">LOCK</button>
         <button class="md" type="button" id="gaiaBtn" aria-pressed="false" title="Overlay Gaia DR3 stars (from MAST), moved to each frame's date">GAIA</button>
+        <button class="md" type="button" id="curveBtn" aria-pressed="false" aria-controls="curve" aria-label="Light curve of the target"
+          title="Light curve: how bright the target (the centre of the field) is in every image, measured in a 12″ circle minus the surrounding sky. Click a point to jump to that date.">CURVE</button>
       </div>
       <div class="cmid">
         <button class="pb plain" type="button" id="prev" aria-label="Previous observation"><svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M13.5 3.5v11L5.5 9z"></path><rect x="3" y="3.5" width="1.8" height="11"></rect></svg></button>

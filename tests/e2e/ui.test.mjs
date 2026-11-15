@@ -282,7 +282,40 @@ async function stacks() {
       assert((await b.getAttribute("aria-label")) && (await b.getAttribute("title")).length > 40);
     }
   });
+
+  await check("LOCK is on by default for stacks, off for single frames, and saved in the URL when changed", async () => {
+    assert((await p.getAttribute("#lockBtn", "aria-pressed")) === "true");
+    const r0 = await p.evaluate(() => lockRange()), first = await p.evaluate(() => ex.frames[0].range);
+    assert(r0 && first && r0[0] === first[0] && r0[1] === first[1], "scale from the first epoch");
+    await p.click('[data-view="frames"]');
+    assert((await p.getAttribute("#lockBtn", "aria-pressed")) === "false");
+    await p.click("#lockBtn"); assert(/lock=1/.test(await p.evaluate(() => location.hash)));
+    await p.click("#lockBtn"); await p.click('[data-view="stacks"]');
+    assert((await p.getAttribute("#lockBtn", "aria-pressed")) === "true" && !/lock=/.test(await p.evaluate(() => location.hash)));
+  });
+  await check("CURVE: one point per loaded epoch; clicking a point shows that epoch; closes", async () => {
+    if (await p.isHidden("#curve")) await p.click("#curveBtn");
+    assert(await p.isVisible("#curve") && (await p.getAttribute("#curveBtn", "aria-pressed")) === "true");
+    const n = await p.evaluate(() => ex.frames.filter((f) => f.cut).length);
+    assert((await p.locator("#curveSvg .cvpt").count()) === n, "points");
+    assert(/^TARGET BRIGHTNESS|^SATURATED/.test(await p.textContent("#curveTitle")));
+    assert(/mJy/.test(await p.getAttribute("#curveSvg", "aria-label")));
+    await p.locator('#curveSvg .cvpt[data-i="1"] circle').first().click();
+    assert((await p.textContent("#frameNo")).startsWith("2/"), await p.textContent("#frameNo"));
+    assert((await p.locator('#curveSvg .cvpt[data-i="1"] circle[stroke="#E03C31"]').count()) === 1, "current point highlighted");
+    await p.click("#curveClose"); assert(await p.isHidden("#curve"));
+    await p.click("#curveBtn"); assert(await p.isVisible("#curve"));
+  });
   await close(p);
+
+  const rd = await open("#ra=248.167611&dec=66.754979&size=600&band=SPHEREx-D3&curve=1");
+  await exploreReady(rd);
+  await check("CURVE: a saturated star (R Draconis) is measured in its halo ring, and it changes", async () => {
+    assert(/^SATURATED/.test(await rd.textContent("#curveTitle")) && /ring \d+–\d+″/.test(await rd.textContent("#curveNote")));
+    const f = await rd.evaluate(() => ex.frames.map((x) => x.phot && x.phot.flux));
+    assert(f.length >= 2 && f.every((v) => v > 0) && Math.max(...f) / Math.min(...f) > 1.5, JSON.stringify(f));
+  });
+  await close(rd);
 
   const u = await open(BARNARD_STACKS + "&mode=diff&ref=first");
   await exploreReady(u);
@@ -352,7 +385,7 @@ async function page2() {
   });
   await check("P2 header has only Back; control bar has VIEW, counter, MODE and GAIA", async () => {
     assert((await p.locator(".extop").innerText()).trim() === "Back");
-    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,NORMAL,BLINK,DIFF,GAIA");
+    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,NORMAL,BLINK,DIFF,LOCK,GAIA,CURVE");
     assert((await p.locator("#regionInfo, #flagChip, #diffBtn, #fsBtn, #exZoom [data-zoom=reset]").count()) === 0);
   });
   await check("P2 clicking a date shows that image", async () => {

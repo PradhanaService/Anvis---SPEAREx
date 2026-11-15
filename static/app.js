@@ -205,7 +205,7 @@ class SkyView {
 
   down(e) {
     // Presses on links or buttons over the image belong to them, not to pan / pick.
-    if (e.button !== 0 || !this.field || e.target.closest("a, button, .pop")) return;
+    if (e.button !== 0 || !this.field || e.target.closest("a, button, .pop, .curve")) return;
     this.drag = { x: e.clientX, y: e.clientY, tx: this.tx, ty: this.ty, moved: false };
     this.box.setPointerCapture(e.pointerId);
   }
@@ -641,12 +641,15 @@ PRESETS.forEach((t) => {
 //   mode = "normal" | "blink" | "diff"; ref = what BLINK / DIFF compare with: "prev" (the nearest
 //          earlier loaded item), "first" (the first loaded item) or an item index;
 //          blinkAlt/blinkTimer = BLINK state; diff = the difference image on screen (for the pop-up)
+//   lock = per view, whether every image uses one brightness scale (see lockRange)
+//   curve = whether the light-curve panel is open
 //   pick = clicked field pixel {ix, iy} for the About pop-up
 //   searchId bumps on every search, so replies for an older search are ignored
 const ex = {
   target: null, band: "", h: 0, w: 0, view: "stacks", lists: {},
   frames: [], current: 0, timer: null, playing: false, speedIdx: 2,
   mode: "normal", ref: "prev", blinkAlt: false, blinkTimer: null, diff: null,
+  lock: { stacks: true, frames: false }, curve: window.innerWidth > 760,
   pick: null,
   searchId: 0,
 };
@@ -749,7 +752,7 @@ async function loadList(view, id) {
     else if (!f.failed) { f.failed = true; L.failed++; }
     if (!active()) return;   // the other view is on screen; this one keeps loading in the background
     const i = L.items.indexOf(f);
-    updateChip(i);
+    updateChip(i); renderCurve();
     if (!exView.hasImage && frame && i === ex.current) exLoading("");
     else if (!exView.hasImage) exLoading(loadingText(L));
     // An item arriving can change what BLINK / DIFF compare with.
@@ -811,6 +814,7 @@ function setView(v) {
   loadList(v, ex.searchId);
 }
 function renderView() {
+  $("lockBtn").setAttribute("aria-pressed", String(!!ex.lock[ex.view]));
   document.querySelectorAll("#viewSeg [data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === ex.view)));
 }
 document.querySelectorAll("#viewSeg [data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
@@ -903,7 +907,8 @@ function showFrame() {
   if (ex.diff) {
     exView.setImage(ex.diff, ex.target.ra, ex.target.dec, { range: [-ex.diff.scale, ex.diff.scale], cmap: DIVERGING });
   } else if (shown.cut) {
-    exView.setImage(shown.cut, ex.target.ra, ex.target.dec, DISPLAY);
+    const range = ex.lock[ex.view] && lockRange();
+    exView.setImage(shown.cut, ex.target.ra, ex.target.dec, range ? { ...DISPLAY, range } : DISPLAY);
   } else {
     exView.clearImage();
     if (!$("explore").hidden && ex.frames.length) {
@@ -911,7 +916,7 @@ function showFrame() {
     }
   }
   if (exView.hasImage) exLoading("");
-  renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks();
+  renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks(); renderCurve();
 }
 
 // The label at the top of the image in BLINK / DIFF, and the DIFF colour legend.
@@ -1096,6 +1101,110 @@ $("next").addEventListener("click", () => { stop(); stepFrame(1); });
 $("play").addEventListener("click", play);
 $("pause").addEventListener("click", stop);
 
+// ---- LOCK: one brightness scale for every image, so brightness changes are real on screen.
+// The scale is the reference's own (the VS choice if it is a chosen date, else the first loaded
+// image), from the same percentiles as the normal display. Without it every image is stretched
+// on its own, which hides a star getting brighter or fainter.
+function lockRange() {
+  const src = typeof ex.ref === "number" && ex.frames[ex.ref] && ex.frames[ex.ref].cut ? ex.frames[ex.ref] : ex.frames.find((f) => f.cut);
+  if (!src) return null;
+  if (!src.range) {
+    const v = src.cut.data.filter((x) => x !== null).sort((a, b) => a - b);
+    src.range = [percentile(v, DISPLAY.minb), percentile(v, DISPLAY.maxb)];
+  }
+  return src.range;
+}
+$("lockBtn").addEventListener("click", () => {
+  ex.lock[ex.view] = !ex.lock[ex.view]; renderView(); showFrame(); writeHash(ex.target);
+});
+
+// ---- CURVE: light curve of the target (aperture photometry at the field centre, see
+// aperturePhotometry in anvis-math.js) for every loaded image; click a point to show that image.
+// In Single frames view points are shaded by wavelength (SPHEREx sees a different wavelength
+// on every visit, which changes a star's brightness too). Hollow = treat with care: missing
+// pixels in the aperture, or (single frames) quality flags at the target, e.g. saturation.
+// Stacks already leave flagged pixels out, so their flags alone don't make a point hollow.
+// Saturated stars (no data at their centre in most images) are measured in a ring outside the
+// largest hole instead, the same ring for every date: a relative brightness, fine for comparing
+// dates but not a total flux.
+const CURVE_COLOR = "#38bdf8";
+function curveAperture() {
+  const loaded = ex.frames.filter((f) => f.cut);
+  const holes = loaded.map((f) => (f.hole ??= coreHoleRadius(f.cut, f.cut.width / 2, f.cut.height / 2)));
+  const saturated = holes.filter((h) => h > 0 && h <= APERTURE.r + 0.5).length + holes.filter((h) => h > APERTURE.r + 0.5).length;
+  if (!loaded.length || saturated < 0.3 * loaded.length) return { ...APERTURE, r0: 0, ring: false };
+  const sorted = holes.filter((h) => h > 0).sort((a, b) => a - b);
+  const r0 = Math.ceil(sorted[Math.floor(0.9 * (sorted.length - 1))]) + 0.5;   // outside 90% of the holes
+  return { r0, r: r0 + 3, rin: r0 + 5, rout: r0 + 9, ring: true };
+}
+function phot(f, ap) {
+  if (!f.cut) return null;
+  const key = `${ap.r0}/${ap.r}`;
+  if (f.photKey !== key) { f.phot = aperturePhotometry(f.cut, f.cut.width / 2, f.cut.height / 2, ap); f.photKey = key; }
+  return f.phot;
+}
+function renderCurve() {
+  const panel = $("curve"), on = ex.curve && !!ex.frames.length;
+  panel.hidden = !on; exBox.classList.toggle("curve-open", on);
+  $("curveBtn").setAttribute("aria-pressed", String(ex.curve));
+  if (!on) return;
+  const svg = $("curveSvg"), W = Math.max(160, svg.clientWidth || 300), H = Math.max(60, svg.clientHeight || 96);
+  const ap = curveAperture();
+  const pts = ex.frames.map((f, i) => ({ f, i, p: phot(f, ap) })).filter((q) => q.p);
+  const asec = (v) => (v * 6.15).toFixed(0);
+  $("curveTitle").textContent = ap.ring ? "SATURATED · HALO · mJy" : "TARGET BRIGHTNESS · mJy";
+  $("curveNote").textContent = `${pts.length} of ${ex.frames.length} · ` + (ap.ring ? `ring ${asec(ap.r0)}–${asec(ap.r)}″` : `r ${asec(ap.r)}″`);
+  $("curveTitle").title = ap.ring
+    ? `The target is saturated (no data at its centre), so this measures its halo in a ring ${asec(ap.r0)}–${asec(ap.r)}″ from the centre, the same ring on every date. It goes up and down with the star's brightness: compare dates, but it is not the star's total brightness.`
+    : `Sum of the target's light within ${asec(ap.r)}″ of the field centre, minus the sky measured ${asec(ap.rin)}–${asec(ap.rout)}″ away. An aperture flux (about 90% of a point source's light), for comparing dates.`;
+  if (pts.length < 1) {
+    svg.innerHTML = `<text x="${W / 2}" y="${H / 2}" text-anchor="middle" class="cvempty">${ex.frames.some((f) => f.cut) ? "No measurement at the target" : "Waiting for images…"}</text>`;
+    $("curveKey").textContent = ""; return;
+  }
+  const M = { l: 46, r: 8, t: 6, b: 16 };
+  let lo = Math.min(...pts.map((q) => q.p.flux - q.p.err)), hi = Math.max(...pts.map((q) => q.p.flux + q.p.err));
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.1 || 1; lo -= pad; hi += pad;
+  const t0 = Math.min(...pts.map((q) => q.f.mjd)), t1 = Math.max(...pts.map((q) => q.f.mjd));
+  const X = (m) => M.l + 12 + (t1 > t0 ? (m - t0) / (t1 - t0) : 0.5) * (W - M.l - M.r - 24);   // 12 px inside the axes
+  const Y = (v) => M.t + (1 - (v - lo) / (hi - lo)) * (H - M.t - M.b);
+  const waves = pts.map((q) => q.f.cut.wavelength_um).filter(Boolean), w0 = Math.min(...waves), w1 = Math.max(...waves);
+  const shade = (f) => ex.view === "frames" && f.cut.wavelength_um && w1 > w0 ? 0.3 + (0.7 * (f.cut.wavelength_um - w0)) / (w1 - w0) : 1;
+  const fmt = (v) => Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toPrecision(2);
+  const day = (m) => { const d = shortDate(pts.find((q) => q.f.mjd === m).f.date); return `${d.day} ${d.year}`; };
+  let out = `<line class="cvaxis" x1="${M.l}" y1="${M.t}" x2="${M.l}" y2="${H - M.b}"/><line class="cvaxis" x1="${M.l}" y1="${H - M.b}" x2="${W - M.r}" y2="${H - M.b}"/>` +
+    `<text class="cvtick" x="${M.l - 4}" y="${Y(hi - pad) + 3}" text-anchor="end">${fmt(hi - pad)}</text>` +
+    `<text class="cvtick" x="${M.l - 4}" y="${Y(lo + pad) + 3}" text-anchor="end">${fmt(lo + pad)}</text>` +
+    `<text class="cvtick" x="${M.l}" y="${H - 3}">${esc(day(t0))}</text>` +
+    `<text class="cvtick" x="${W - M.r}" y="${H - 3}" text-anchor="end">${esc(day(t1))}</text>`;
+  let cur = "";
+  for (const { f, i, p } of pts) {
+    const x = X(f.mjd), y = Y(p.flux), flagged = p.nbad > 0 || (!f.stack && f.cut.quality && f.cut.quality.length > 0);
+    const tip = `${itemName(f)}${f.stack ? "" : " " + shortDate(f.date).time + " UTC"}: ${fmt(p.flux)} ± ${fmt(p.err)} mJy` +
+      (f.cut.wavelength_um ? ` at ${f.cut.wavelength_um.toFixed(3)} µm` : "") + (flagged ? " (flagged)" : "");
+    const g = `<g class="cvpt" data-i="${i}"><title>${esc(tip)}</title>` +
+      `<line x1="${x}" y1="${Y(p.flux - p.err)}" x2="${x}" y2="${Y(p.flux + p.err)}" stroke="${CURVE_COLOR}" stroke-opacity="${shade(f)}"/>` +
+      `<circle cx="${x}" cy="${y}" r="${i === ex.current ? 5 : 3.5}" fill="${flagged ? "none" : CURVE_COLOR}" fill-opacity="${shade(f)}" stroke="${CURVE_COLOR}" stroke-opacity="${shade(f)}" stroke-width="1.5"/>` +
+      (i === ex.current ? `<circle cx="${x}" cy="${y}" r="8" fill="none" stroke="#E03C31" stroke-width="2"/>` : "") + `</g>`;
+    if (i === ex.current) cur = g; else out += g;
+  }
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = out + cur;   // the current point last, on top
+  const now = phot(ex.frames[ex.current], ap);
+  svg.setAttribute("aria-label", `Light curve of the target: ${pts.length} measurements from ${fmt(lo + pad)} to ${fmt(hi - pad)} mJy` +
+    (now ? `; this image ${fmt(now.flux)} mJy` : ""));
+  $("curveKey").innerHTML = (ex.view === "frames" && w1 > w0
+    ? `<span class="cvramp"></span> λ ${w0.toFixed(2)} → ${w1.toFixed(2)} µm · ` : "") +
+    `<span class="cvhollow"></span> flagged · <span class="cvnow"></span> shown`;
+}
+$("curveSvg").addEventListener("click", (e) => {
+  const g = e.target.closest(".cvpt"); if (!g) return;
+  stop(); go(Number(g.dataset.i));
+});
+$("curveBtn").addEventListener("click", () => { ex.curve = !ex.curve; renderCurve(); writeHash(ex.target); });
+$("curveClose").addEventListener("click", () => { ex.curve = false; renderCurve(); writeHash(ex.target); $("curveBtn").focus(); });
+["pointerdown", "pointerup", "wheel"].forEach((t) => $("curve").addEventListener(t, (e) => e.stopPropagation()));
+new ResizeObserver(() => renderCurve()).observe($("curveSvg"));
+
 // ---- GAIA: Gaia DR3 stars from MAST, moved to each frame's date
 // Gaia positions are for epoch 2016.0; each star is moved by its proper motion to the date of the
 // frame on screen (parallax shifts, at most ~0.8″, are ignored: well under one 6.15″ pixel).
@@ -1245,6 +1354,8 @@ function writeHash(c) {
   if (ex.view !== "stacks") p.set("view", ex.view);
   if (ex.mode !== "normal") p.set("mode", ex.mode);
   if (ex.ref !== "prev") p.set("ref", ex.ref);
+  if (ex.lock[ex.view] !== (ex.view === "stacks")) p.set("lock", ex.lock[ex.view] ? 1 : 0);   // only when not the default
+  if (ex.curve !== window.innerWidth > 760) p.set("curve", ex.curve ? 1 : 0);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
@@ -1265,6 +1376,8 @@ function readHash() {
   ex.mode = ["blink", "diff"].includes(p.get("mode")) ? p.get("mode") : "normal";
   const r = p.get("ref");
   ex.ref = r === "first" ? "first" : /^\d+$/.test(r || "") ? Number(r) : "prev";
+  if (p.has("lock")) ex.lock[ex.view] = p.get("lock") === "1";
+  if (p.has("curve")) ex.curve = p.get("curve") === "1";
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }
