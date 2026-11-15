@@ -96,7 +96,7 @@ async function page1() {
     assert(!images.length, "images downloaded before Search: " + images.join());
     assert(await p.isVisible("#pick"), "a click must not search");
   });
-  await check("P1 grid: scroll zooms; drag selects an area (RA, Dec, field height) and fades the hint", async () => {
+  await check("P1 grid: scroll zooms; drag selects an area (RA, Dec, field height); the hint stays", async () => {
     const z0 = await p.evaluate(() => map.z);
     for (let k = 0; k < 8; k++) { await p.mouse.move(mp.x + mp.width / 2, mp.y + mp.height / 2); await p.mouse.wheel(0, -400); await p.waitForTimeout(60); }
     assert((await p.evaluate(() => map.z)) > z0, "wheel did not zoom");
@@ -106,7 +106,7 @@ async function page1() {
     await p.mouse.move(mp.x + mp.width * 0.55, mp.y + mp.height * 0.55, { steps: 8 }); await p.mouse.up();
     assert(near(parseFloat(await p.inputValue("#ra")), want.ra, 0.01) && near(parseFloat(await p.inputValue("#dec")), want.dec, 0.01));
     assert(Number(await p.inputValue("#size")) === want.h, "field height from the area");
-    assert(await p.evaluate(() => document.getElementById("mapNote").classList.contains("gone")), "hint faded");
+    assert(await p.isVisible("#mapNote"), "the hint stays visible");
     await p.fill("#size", "4"); await p.dispatchEvent("#size", "input");
   });
   await pickBarnard(p);

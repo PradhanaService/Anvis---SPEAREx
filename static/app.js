@@ -526,7 +526,7 @@ mapBox.addEventListener("pointermove", (e) => {
     if (d.moved) {   // dragging selects an area (the box drawn by drawMap)
       const a = mapLocal({ clientX: d.x, clientY: d.y });
       d.end = { x0: Math.min(a.x, p.x), y0: Math.min(a.y, p.y), x1: Math.max(a.x, p.x), y1: Math.max(a.y, p.y) };
-      hideMapNote(); drawMap();
+      drawMap();
     }
   }
   mapHover(d && d.moved ? null : p.x, p.y);
@@ -534,7 +534,7 @@ mapBox.addEventListener("pointermove", (e) => {
 mapBox.addEventListener("pointerup", (e) => {
   const d = map.drag; map.drag = null; mapBox.classList.remove("dragging");
   if (!d) return;
-  hideMapNote(); mapHover(null);
+  mapHover(null);
   if (d.moved && d.end) {
     // An area: its centre is the position; its height sets the field height (1′–30′).
     const t = mapSky(d.end.x0, d.end.y0), b = mapSky(d.end.x1, d.end.y1);
@@ -555,9 +555,6 @@ mapBox.addEventListener("wheel", (e) => { e.preventDefault(); const p = mapLocal
 new ResizeObserver(() => drawMap()).observe(mapBox);
 // Centre the grid on a position (kept within the sky).
 function centreMap(c) { map.ra0 = c.ra; map.dec0 = c.dec; drawMap(); }
-// The backdrop hint on the grid fades out for good on the first click, drag or typing.
-function hideMapNote() { $("mapNote").classList.add("gone"); }
-["ra", "dec"].forEach((id) => $(id).addEventListener("input", hideMapNote));
 
 function runSearch() {      // returns true when the search starts
   const c = typedPosition(true);

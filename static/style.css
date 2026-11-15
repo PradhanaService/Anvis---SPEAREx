@@ -356,8 +356,16 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .tgtring i:nth-child(3), .tgtring i:nth-child(4) { top: 50%; width: 9px; height: 2px; margin-top: -1px; }
 .tgtring i:nth-child(3) { left: -11px; } .tgtring i:nth-child(4) { right: -11px; }
 
-/* Backdrop hint on the sky grid; fades out on the first click, drag or typing. */
+/* Backdrop hint on the sky grid (always shown; clicks pass through it). */
 .mapnote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center;
-  font-size: clamp(14px, 2.2vw, 22px); font-weight: 600; color: rgba(255,255,255,.28); pointer-events: none;
-  transition: opacity .6s ease; }
-.mapnote.gone { opacity: 0; }
+  font-size: clamp(14px, 2.2vw, 22px); font-weight: 600; color: rgba(255,255,255,.38); pointer-events: none; }
+
+/* Help buttons: red pills with a white i and a label, pulsing gently so they are easy to find.
+   The one on page 2 is larger and sits a little in from the right edge. */
+.infobtn { width: auto; height: 32px; gap: 6px; padding: 0 12px 0 8px; border-radius: 999px;
+  font: 800 11px 'Public Sans', sans-serif; letter-spacing: .08em; animation: helppulse 2s ease-out infinite; }
+.infobtn svg { width: 16px; height: 16px; }
+.infotxt { white-space: nowrap; }
+.infobtn.infobig { height: 38px; padding: 0 16px 0 10px; font-size: 13px; margin-right: 18px; }
+.infobtn.infobig svg { width: 19px; height: 19px; }
+@media (prefers-reduced-motion: reduce) { .infobtn { animation: none; } }
