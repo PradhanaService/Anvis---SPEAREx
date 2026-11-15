@@ -64,3 +64,10 @@ def test_gaia_returns_barnards_star(client):
     d = client.get(f"/api/gaia?ra={ra}&dec={dec}&radius=0.05&gmax=19").get_json()
     barnard = [s for s in d["stars"] if s[0] == "4472832130942575872"]
     assert barnard and barnard[0][4] > 10000                    # +10.36″/yr northward motion
+
+
+def test_wise_returns_wise_0855(client):
+    d = client.get("/api/wise?ra=133.795129&dec=-7.245147&radius=0.05&w2max=17").get_json()
+    assert d["catalog"] in ("CatWISE2020", "AllWISE")
+    fast = [s for s in d["sources"] if s[3] is not None and (s[3] ** 2 + s[4] ** 2) ** 0.5 > 7000]
+    assert fast and all(s[5] is None or s[5] - s[6] > 1 for s in fast)     # ~8″/yr and very red

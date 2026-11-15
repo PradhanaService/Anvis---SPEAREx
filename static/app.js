@@ -683,7 +683,7 @@ async function openExplore(c) {
   Object.assign(ex, { target: c, band: $("band").value, h: heightArcsec(),
                       lists: { stacks: newList(), frames: newList() }, frames: [], current: 0, pick: null });
   ex.w = exploreWidth(ex.h);
-  loadGaia(c);
+  loadGaia(c); loadWise(c);
   $("strip").innerHTML = ""; $("exCredit").textContent = "";
   $("pop").hidden = true; $("noObs").hidden = true;
   exView.field = null; exView.clearImage();
@@ -1009,7 +1009,7 @@ function renderPop() {
       prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
       prow("Source files", `${f.n} FITS files at IRSA · listed in Single frames`),
     ];
-    $("popRows").innerHTML = rows.join("") + gaiaPopRows(c, f.mjd);
+    $("popRows").innerHTML = rows.join("") + gaiaPopRows(c, f.mjd) + wisePopRows(c, f.mjd);
     $("popNoData").hidden = val !== null;
     pop.hidden = false; positionPop();
     return;
@@ -1024,7 +1024,7 @@ function renderPop() {
     prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
     prow("Source file", `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
   ];
-  $("popRows").innerHTML = rows.join("") + gaiaPopRows(c, f.mjd);
+  $("popRows").innerHTML = rows.join("") + gaiaPopRows(c, f.mjd) + wisePopRows(c, f.mjd);
   $("popNoData").hidden = val !== null;
   pop.hidden = false;
   positionPop();
@@ -1227,7 +1227,7 @@ async function loadGaia(c) {
     if (id !== gaia.id) return;
     gaia.error = e.message;
   }
-  gaia.loading = false;
+  gaia.loading = false; wise.cand = null;
   drawGaia(); if (!$("pop").hidden) renderPop();
 }
 // Star [id, ra, dec, pmra, pmdec, plx, plx_err, G, bp_rp] -> {ra, dec} at the given MJD.
@@ -1235,7 +1235,8 @@ function gaiaAt(st, mjd) {
   const yrs = (mjd - MJD_J2016) / 365.25, dec = st[2] + ((st[4] || 0) * yrs) / 3.6e6;
   return { ra: st[1] + ((st[3] || 0) * yrs) / 3.6e6 / Math.cos((st[2] * Math.PI) / 180), dec };
 }
-// Draw the Gaia rings (and motion arrows) on their own canvas above the image.
+// Draw the overlays on their own canvas above the image: Gaia rings (and motion arrows), then
+// WISE squares. The label lists what is shown, one line per catalogue.
 function drawGaia() {
   const cv = $("gaiaCanvas"), lbl = $("gaiaLabel"), r = exView.rect(), dpr = Math.min(2, window.devicePixelRatio || 1);
   const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
@@ -1243,12 +1244,19 @@ function drawGaia() {
   const ctx = cv.getContext("2d");
   ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, W, H);
   $("gaiaBtn").setAttribute("aria-pressed", String(gaia.on));
-  lbl.hidden = !gaia.on;
-  if (!gaia.on) return;
-  if (gaia.loading) { lbl.textContent = "GAIA DR3 · loading from MAST…"; return; }
-  if (gaia.error) { lbl.textContent = "GAIA DR3 · unavailable: " + gaia.error; return; }
+  $("wiseBtn").setAttribute("aria-pressed", String(wise.on));
+  lbl.hidden = !gaia.on && !wise.on;
+  const lines = [];
+  if (gaia.on) lines.push(["gaia", drawGaiaLayer(ctx, r, dpr)]);
+  if (wise.on) lines.push(["wise", drawWiseLayer(ctx, r, dpr)]);
+  lbl.innerHTML = lines.map(([k, t]) => `<div class="ln-${k}">${esc(t)}</div>`).join("");
+}
+// Gaia rings for the image on screen; returns the label line.
+function drawGaiaLayer(ctx, r, dpr) {
+  if (gaia.loading) return "GAIA DR3 · loading from MAST…";
+  if (gaia.error) return "GAIA DR3 · unavailable: " + gaia.error;
   const f = ex.frames[shownIndex()];
-  if (!gaia.data || !exView.field || !exView.hasImage || !f) { lbl.textContent = "GAIA DR3"; return; }
+  if (!gaia.data || !exView.field || !exView.hasImage || !f) return "GAIA DR3";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const fld = exView.field, k = exView.k(), zs = Math.min(1.6, Math.sqrt(exView.z));
   let shown = 0;
@@ -1277,7 +1285,7 @@ function drawGaia() {
     }
   }
   const d = shortDate(f.date), when = f.stack ? `mid-survey ${f.epoch + 1}` : `${d.day} ${d.year}`;
-  lbl.textContent = `GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${when}` +
+  return `GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${when}` +
     (gaia.data.truncated ? ` · brightest ${gaia.data.stars.length} only` : "") + ` · arrows: ${GAIA_ARROW_YEARS}-yr motion`;
 }
 // Pop-up rows for the nearest Gaia star to sky position c at the given date.
@@ -1313,6 +1321,115 @@ function gaiaPopRows(c, mjd) {
 }
 $("gaiaBtn").addEventListener("click", () => { gaia.on = !gaia.on; drawGaia(); if (ex.target) writeHash(ex.target); });
 
+// ---- WISE: CatWISE2020 (or AllWISE) sources from IRSA, moved to each image's date like Gaia.
+// Brown-dwarf candidates: bright in WISE (W2 ≤ 16), red (W1 − W2 ≥ 0.4, or no W1) and with no
+// Gaia DR3 star (G < GAIA_GMAX) within WISE_GAIA_MATCH″. Cold brown dwarfs glow in the infrared
+// but are too faint for Gaia's visible light. Other things can pass too (galaxies, blends, a
+// Gaia star missing near a bright one), so they are candidates, not discoveries.
+const WISE_W2MAX = 17, WISE_MATCH_ARCSEC = 6.2, WISE_GAIA_MATCH = 3;
+const WISE_CAND = { w2max: 16, minColour: 0.4 };
+const WISE_COLOR = "#ffd23f", CAND_COLOR = "#E03C31";
+const wise = { on: false, data: null, error: null, loading: false, id: 0, cand: null, gaiaPm: null, matched: null };
+
+async function loadWise(c) {
+  const id = ++wise.id;
+  Object.assign(wise, { data: null, error: null, loading: true, cand: null, gaiaPm: null });
+  drawGaia();
+  const radius = Math.min(0.4, Math.hypot(ex.w, ex.h) / 2 / 3600 + 0.01);
+  try {
+    const d = await getJSON(`api/wise?ra=${c.ra}&dec=${c.dec}&radius=${radius.toFixed(4)}&w2max=${WISE_W2MAX}`);
+    if (id !== wise.id) return;
+    wise.data = d;
+  } catch (e) {
+    if (id !== wise.id) return;
+    wise.error = e.message;
+  }
+  wise.loading = false;
+  drawGaia(); if (!$("pop").hidden) renderPop();
+}
+// Source i [name, ra, dec, pmra, pmdec (mas/yr), W1, W2] -> {ra, dec} at the given MJD.
+// Sources matched to a Gaia star move with Gaia's proper motion, which is far more precise
+// (CatWISE can split a bright fast mover into pieces with poor motions, e.g. Epsilon Indi B).
+function wiseAt(s, mjd, i) {
+  const g = i !== undefined && wise.gaiaPm && wise.gaiaPm[i];
+  const pmra = g ? g[0] : s[3] || 0, pmdec = g ? g[1] : s[4] || 0;
+  const yrs = (mjd - wise.data.epoch_mjd) / 365.25, dec = s[2] + (pmdec * yrs) / 3.6e6;
+  return { ra: s[1] + (pmra * yrs) / 3.6e6 / Math.cos((s[2] * Math.PI) / 180), dec };
+}
+const sepArcsec = (a, b) => {
+  let dra = a.ra - b.ra; if (dra > 180) dra -= 360; if (dra < -180) dra += 360;
+  return Math.hypot(dra * Math.cos((b.dec * Math.PI) / 180), a.dec - b.dec) * 3600;
+};
+const isRed = (s) => s[6] != null && s[6] <= WISE_CAND.w2max && (s[5] == null || s[5] - s[6] >= WISE_CAND.minColour);
+// Match WISE to Gaia once both catalogues are in (at Gaia's epoch, 2016.0, close to CatWISE's
+// 2015.4): matched sources get Gaia's proper motion (wise.gaiaPm); red, bright sources with no
+// Gaia match are brown-dwarf candidates (wise.cand, a set of source indices).
+function wiseCandidates() {
+  if (!wise.data || !gaia.data) return null;
+  if (wise.cand) return wise.cand;
+  wise.cand = new Set(); wise.gaiaPm = []; wise.matched = new Set();
+  wise.data.sources.forEach((s, i) => {
+    const p = wiseAt(s, MJD_J2016);
+    const g = gaia.data.stars.find((st) => Math.abs(st[2] - p.dec) * 3600 < WISE_GAIA_MATCH && sepArcsec({ ra: st[1], dec: st[2] }, p) < WISE_GAIA_MATCH);
+    if (g) wise.matched.add(i);
+    if (g && g[3] != null) wise.gaiaPm[i] = [g[3], g[4]];
+    else if (!g && isRed(s)) wise.cand.add(i);
+  });
+  return wise.cand;
+}
+// WISE squares for the image on screen (candidates in red, larger); returns the label line.
+function drawWiseLayer(ctx, r, dpr) {
+  if (wise.loading) return "WISE · loading CatWISE2020 from IRSA (can take up to a minute)…";
+  if (wise.error) return "WISE · unavailable: " + wise.error;
+  const f = ex.frames[shownIndex()];
+  if (!wise.data || !exView.field || !exView.hasImage || !f) return "WISE";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const fld = exView.field, zs = Math.min(1.6, Math.sqrt(exView.z)), cand = wiseCandidates();
+  let shown = 0, nc = 0;
+  wise.data.sources.forEach((s, i) => {
+    const pos = wiseAt(s, f.mjd, i), q = skyToPix(fld, pos.ra, pos.dec), p = exView.toScreen(q.ix, q.iy);
+    if (!exView.inside(q.ix, q.iy) || p.x < -20 || p.y < -20 || p.x > r.width + 20 || p.y > r.height + 20) return;
+    shown++;
+    const c = cand && cand.has(i); if (c) nc++;
+    const h = (c ? 8 : Math.max(3, Math.min(7, 7 - ((s[6] || 16) - 10) * 0.5))) * zs;
+    for (const [w, col] of [[3, "rgba(0,0,0,0.6)"], [c ? 2 : 1.25, c ? CAND_COLOR : WISE_COLOR]]) {
+      ctx.lineWidth = w; ctx.strokeStyle = col; ctx.strokeRect(p.x - h, p.y - h, 2 * h, 2 * h);
+    }
+  });
+  const d = wise.data;
+  return `${d.catalog.toUpperCase()} · W2 < ${d.w2max} · ${shown} sources` +
+    (cand ? ` · ${nc} brown-dwarf candidate${nc === 1 ? "" : "s"} (red)` : gaia.error ? " · candidates need Gaia" : "") +
+    (d.truncated ? ` · brightest ${d.sources.length} only` : "");
+}
+// Pop-up rows for the nearest WISE source to sky position c at the given date.
+function wisePopRows(c, mjd) {
+  if (!wise.on && !wise.data) return "";
+  const head = `<div class="popsec popsec-wise">WISE · ${esc(wise.data ? wise.data.catalog : "CatWISE2020")} · IRSA</div>`;
+  if (wise.loading) return head + `<div class="popnote">Loading WISE sources…</div>`;
+  if (wise.error) return head + `<div class="popnote">WISE unavailable: ${esc(wise.error)}</div>`;
+  if (!wise.data) return "";
+  let best = -1, bd = Infinity;
+  const cand = wiseCandidates();
+  wise.data.sources.forEach((s, i) => { const d = sepArcsec(wiseAt(s, mjd, i), c); if (d < bd) { bd = d; best = i; } });
+  if (best < 0 || bd > WISE_MATCH_ARCSEC) return head + `<div class="popnote">No WISE source with W2 < ${wise.data.w2max} within ${WISE_MATCH_ARCSEC}″ at this date.</div>`;
+  const [name, , , wpmra, wpmdec, w1, w2] = wise.data.sources[best];
+  const g = wise.gaiaPm && wise.gaiaPm[best], pmra = g ? g[0] : wpmra, pmdec = g ? g[1] : wpmdec;
+  const pm = Math.hypot(pmra || 0, pmdec || 0), pa = ((Math.atan2(pmra || 0, pmdec || 0) * 180) / Math.PI + 360) % 360;
+  const isCand = cand && cand.has(best);
+  return head + [
+    `<div class="prow wide"><div class="k">WISE source</div><div class="v">${esc(name)}</div></div>`,
+    prow("W1 (3.4 µm)", w1 != null ? `${w1.toFixed(2)} mag` : "not detected"),
+    prow("W2 (4.6 µm)", w2 != null ? `${w2.toFixed(2)} mag` : "—"),
+    prow("W1 − W2", w1 != null && w2 != null ? (w1 - w2).toFixed(2) + (w1 - w2 >= 0.4 ? " · red" : "") : "—"),
+    prow("Proper motion", pmra != null ? `${pm.toFixed(0)} mas/yr · PA ${pa.toFixed(0)}°` + (g ? " (Gaia)" : "") : "—"),
+    prow("Offset", `${bd.toFixed(1)}″`),
+    prow("Gaia match", !cand ? "—" : wise.matched.has(best) ? `yes, within ${WISE_GAIA_MATCH}″` : `none within ${WISE_GAIA_MATCH}″`),
+  ].join("") + (isCand
+    ? `<div class="popnote popcand">Brown-dwarf candidate: bright and red in WISE, but no Gaia DR3 star (G < ${GAIA_GMAX}) within ${WISE_GAIA_MATCH}″.</div>`
+    : "");
+}
+$("wiseBtn").addEventListener("click", () => { wise.on = !wise.on; drawGaia(); renderPop(); if (ex.target) writeHash(ex.target); });
+
 // Keys on page 2: ← / → step, Space plays or pauses, Esc closes the pop-up.
 document.addEventListener("keydown", (e) => {
   if ($("explore").hidden) return;
@@ -1327,7 +1444,7 @@ document.addEventListener("keydown", (e) => {
 // Back to page 1, with the searched position selected (the preview reloads if needed).
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
-  stop(); stopBlink(); ex.searchId++; gaia.id++;
+  stop(); stopBlink(); ex.searchId++; gaia.id++; wise.id++;
   history.replaceState(null, "", location.pathname + location.search);
   $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;
@@ -1351,6 +1468,7 @@ function writeHash(c) {
   p.set("size", heightArcsec() || 240); p.set("band", $("band").value);
   p.set("speed", SPEED_LIST[ex.speedIdx]);
   if (gaia.on) p.set("gaia", 1);
+  if (wise.on) p.set("wise", 1);
   if (ex.view !== "stacks") p.set("view", ex.view);
   if (ex.mode !== "normal") p.set("mode", ex.mode);
   if (ex.ref !== "prev") p.set("ref", ex.ref);
@@ -1372,6 +1490,7 @@ function readHash() {
     ex.speedIdx = best;
   }
   gaia.on = p.get("gaia") === "1";
+  wise.on = p.get("wise") === "1";
   ex.view = VIEWS.includes(p.get("view")) ? p.get("view") : "stacks";
   ex.mode = ["blink", "diff"].includes(p.get("mode")) ? p.get("mode") : "normal";
   const r = p.get("ref");

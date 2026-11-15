@@ -317,6 +317,49 @@ async function stacks() {
   });
   await close(rd);
 
+  // WISE overlay: click the WISE source nearest a sky position (at the date on screen); return the pop-up text.
+  const clickWise = async (q, ra, dec) => {
+    const pt = await q.evaluate(([ra, dec]) => {
+      const f = ex.frames[ex.current]; let best = null, bd = 1e9;
+      wise.data.sources.forEach((s, i) => { const a = wiseAt(s, f.mjd, i), d = sepArcsec(a, { ra, dec }); if (d < bd) { bd = d; best = a; } });
+      const p = skyToPix(exView.field, best.ra, best.dec), sc = exView.toScreen(p.ix, p.iy), r = exView.rect();
+      return { x: r.left + sc.x, y: r.top + sc.y, bd };
+    }, [ra, dec]);
+    await q.mouse.click(pt.x, pt.y);
+    return { sep: pt.bd, text: await q.textContent("#popRows") };
+  };
+  const w855 = await open("#ra=133.795129&dec=-7.245147&size=300&band=SPHEREx-D6&wise=1&gaia=1");
+  await w855.waitForFunction(() => ex.lists.stacks && ex.lists.stacks.finished && wise.data && gaia.data, null, { timeout: 400000 });
+  await check("WISE: toggle, squares and label; WISE 0855 is matched with no Gaia star and flagged as a brown-dwarf candidate", async () => {
+    assert((await w855.getAttribute("#wiseBtn", "aria-pressed")) === "true" && /wise=1/.test(await w855.evaluate(() => location.hash)));
+    assert(/^CATWISE2020 · W2 < 17 · \d+ sources · \d+ brown-dwarf candidates? \(red\)/.test(await w855.textContent("#gaiaLabel .ln-wise")), await w855.textContent("#gaiaLabel"));
+    await w855.locator(".fr").last().click();
+    const r = await clickWise(w855, 133.759765, -7.242182);       // WISE 0855's 2026 position
+    assert(r.sep < 6, "WISE source within 6″ of WISE 0855: " + r.sep);
+    assert(/W1 − W2[\d.]+ · red/.test(r.text) && /Proper motion8\d{3} mas\/yr/.test(r.text), r.text);
+    assert(/Gaia matchnone within 3″/.test(r.text) && /Brown-dwarf candidate/.test(r.text) && /No Gaia DR3 star/.test(r.text), r.text);
+    await w855.click("#popClose");
+    await w855.click("#wiseBtn"); assert(await w855.evaluate(() => !wise.on) && !/wise=1/.test(await w855.evaluate(() => location.hash)));
+  });
+  await close(w855);
+  const eib = await open("#ra=331.096669&dec=-56.800649&size=300&band=SPHEREx-D6&wise=1&gaia=1");
+  await eib.waitForFunction(() => ex.lists.stacks && ex.lists.stacks.finished && wise.data && gaia.data, null, { timeout: 400000 });
+  await check("WISE: Epsilon Indi B is matched (red in WISE) and follows Gaia's motion – Gaia DR3 does detect it", async () => {
+    await eib.locator(".fr").last().click();
+    const r = await clickWise(eib, 331.096669, -56.800649);
+    assert(r.sep < 9, "WISE source near Epsilon Indi B: " + r.sep);
+    assert(/W1 − W21\.\d+ · red/.test(r.text) && /\(Gaia\)/.test(r.text) && /Gaia matchyes/.test(r.text) && /6412596012146801152/.test(r.text), r.text);
+  });
+  await close(eib);
+  const wdown = await open(BARNARD_STACKS + "&wise=1", { setup: routeJSON("**/api/wise*", 502, { error: "WISE query at IRSA failed: busy" }) });
+  await check("FAIL WISE unavailable: the label and the pop-up say so", async () => {
+    await wdown.waitForFunction(() => /WISE · unavailable/.test(document.getElementById("gaiaLabel").textContent), null, { timeout: 60000 });
+    await exploreReady(wdown);
+    const sky = await wdown.locator("#exSky").boundingBox(); await wdown.mouse.click(sky.x + sky.width / 3, sky.y + sky.height / 3);
+    assert(/WISE unavailable: WISE query at IRSA failed/.test(await wdown.textContent("#popRows")));
+  });
+  await close(wdown);
+
   const u = await open(BARNARD_STACKS + "&mode=diff&ref=first");
   await exploreReady(u);
   await check("URL: mode=diff&ref=first is restored", async () => {
@@ -385,7 +428,7 @@ async function page2() {
   });
   await check("P2 header has only Back; control bar has VIEW, counter, MODE and GAIA", async () => {
     assert((await p.locator(".extop").innerText()).trim() === "Back");
-    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,NORMAL,BLINK,DIFF,LOCK,GAIA,CURVE");
+    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,NORMAL,BLINK,DIFF,LOCK,GAIA,WISE,CURVE");
     assert((await p.locator("#regionInfo, #flagChip, #diffBtn, #fsBtn, #exZoom [data-zoom=reset]").count()) === 0);
   });
   await check("P2 clicking a date shows that image", async () => {

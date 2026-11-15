@@ -177,6 +177,8 @@
         <button class="md" type="button" id="lockBtn" aria-pressed="true" aria-label="Lock brightness scale"
           title="Lock brightness scale: show every image with the same brightness scale (from the reference in VS, or the first image), so a star that gets brighter or fainter really looks brighter or fainter. Off: each image gets its own best contrast. On by default for Epoch stacks.">LOCK</button>
         <button class="md" type="button" id="gaiaBtn" aria-pressed="false" title="Overlay Gaia DR3 stars (from MAST), moved to each frame's date">GAIA</button>
+        <button class="md" type="button" id="wiseBtn" aria-pressed="false" aria-label="WISE infrared sources overlay"
+          title="Overlay WISE infrared sources (CatWISE2020 from IRSA, else AllWISE) as yellow squares, moved to each image's date. Red squares are brown-dwarf candidates: bright and red in WISE (W2 ≤ 16, W1−W2 ≥ 0.4) but with no Gaia star within 3″ – cold objects that glow in the infrared yet are too faint for Gaia. Candidates only: galaxies or blends can look the same.">WISE</button>
         <button class="md" type="button" id="curveBtn" aria-pressed="false" aria-controls="curve" aria-label="Light curve of the target"
           title="Light curve: how bright the target (the centre of the field) is in every image, measured in a 12″ circle minus the surrounding sky. Click a point to jump to that date.">CURVE</button>
       </div>

@@ -18,6 +18,7 @@ Endpoints
   GET  /api/cutout       one frame: zodi-subtracted, resampled north-up (JSON)
   POST /api/cutouts      many frames, streamed back one JSON line each as they finish
   POST /api/stack        one survey epoch co-added (inverse-variance weighted, bad pixels skipped)
+  GET  /api/wise         CatWISE2020 (else AllWISE) sources from IRSA around a position
   GET  /api/gaia         Gaia DR3 stars around a position
   GET  /api/collections  the SPHEREx releases searched (ANVIS_COLLECTIONS) and, at a position,
                          every SPHEREx collection IRSA has there
@@ -748,6 +749,110 @@ def gaia():
     except Exception as e:
         app.logger.warning("Gaia query failed: %s", e)
         return bad(f"Gaia query at MAST failed: {e}", 502)
+    resp = Response(text, mimetype="application/json")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
+
+
+# ----------------------------------------------------------------------------- WISE
+# WISE sources from IRSA, for the WISE overlay, the About pop-up and brown-dwarf candidates.
+# CatWISE2020 (WISE + NEOWISE, positions at 2015.4 with proper motions measured over ~10 years)
+# is preferred; AllWISE (positions at 2010.5) is the fallback. Each is asked through IRSA's TAP
+# service first and, if that is slow or down, through IRSA's Gator cone search (same tables).
+IRSA_TAP = IRSA + "/TAP/sync"
+IRSA_GATOR = IRSA + "/cgi-bin/Gator/nph-query"
+WISE_CATALOGS = (
+    # (table, label, name column, reference epoch of ra/dec (MJD), proper-motion unit -> mas/yr)
+    ("catwise_2020", "CatWISE2020", "source_name", 57170.0, 1000.0),       # pm in arcsec/yr
+    ("allwise_p3as_psd", "AllWISE", "designation", 55400.0, 1.0),          # pm in mas/yr
+)
+WISE_MAX_SOURCES = 5000
+WISE_TAP_TIMEOUT = 20     # seconds: IRSA's TAP can take minutes when busy; Gator is then tried
+TAP_RETRY_AFTER = 300     # after TAP fails, go straight to Gator for this many seconds
+_tap_down_until = 0.0
+
+
+def _wise_rows_tap(table, name_col, ra, dec, radius_deg, w2max):
+    global _tap_down_until
+    if time.time() < _tap_down_until:
+        raise RuntimeError("skipped: TAP failed a moment ago")
+    query = (f"SELECT TOP {WISE_MAX_SOURCES} {name_col}, ra, dec, pmra, pmdec, w1mpro, w2mpro FROM {table} "
+             f"WHERE CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra}, {dec}, {radius_deg}))=1 "
+             f"AND w2mpro < {w2max}")
+    try:
+        r = remote_get(IRSA_TAP, params={"QUERY": query, "FORMAT": "csv"}, timeout=WISE_TAP_TIMEOUT, tries=2)
+    except Exception:
+        _tap_down_until = time.time() + TAP_RETRY_AFTER
+        raise
+    return list(csv.DictReader(io.StringIO(r.text)))
+
+
+def _wise_rows_gator(table, name_col, ra, dec, radius_deg, w2max):
+    from astropy.io import ascii   # only needed here
+    params = {"catalog": table, "spatial": "cone", "objstr": f"{ra} {dec}", "radius": round(radius_deg * 3600, 1),
+              "radunits": "arcsec", "outfmt": 1, "outrows": WISE_MAX_SOURCES, "constraints": f"w2mpro<{w2max}",
+              "selcols": f"{name_col},ra,dec,pmra,pmdec,w1mpro,w2mpro"}
+    r = remote_get(IRSA_GATOR, params=params, timeout=90, tries=3)
+    if "[struct stat=" in r.text[:500] and "ERROR" in r.text[:500]:
+        raise RuntimeError(r.text[:200])
+    t = ascii.read(r.text, format="ipac")
+    return [{c: ("" if np.ma.is_masked(row[c]) else row[c]) for c in t.colnames} for row in t]
+
+
+@lru_cache(maxsize=256)
+def wise_cone(ra, dec, radius_deg, w2max):
+    """WISE sources (W2 < w2max) within radius_deg of (ra, dec), brightest in W2 first, as JSON text.
+
+    Each source is [name, ra, dec, pmra, pmdec (mas/yr, pmra includes cos dec), W1, W2]; ra, dec
+    are at the catalogue's reference epoch (epoch_mjd). Tries CatWISE2020 then AllWISE, each via
+    TAP then Gator. Only numbers reach the queries: the endpoint checks them.
+    """
+    errors = []
+    for table, label, name_col, epoch, pm_scale in WISE_CATALOGS:
+        for service, fetch in (("IRSA TAP", _wise_rows_tap), ("IRSA Gator", _wise_rows_gator)):
+            try:
+                rows = fetch(table, name_col, ra, dec, radius_deg, w2max)
+            except Exception as e:
+                errors.append(f"{label} via {service}: {e}")
+                app.logger.warning("WISE: %s via %s failed: %s", label, service, e)
+                continue
+
+            def num(v, nd, scale=1.0):
+                try:
+                    x = float(v) * scale
+                except (TypeError, ValueError):
+                    return None
+                return round(x, nd) if np.isfinite(x) else None
+
+            out = [[str(r[name_col]).strip(), num(r["ra"], 7), num(r["dec"], 7), num(r["pmra"], 2, pm_scale),
+                    num(r["pmdec"], 2, pm_scale), num(r["w1mpro"], 3), num(r["w2mpro"], 3)] for r in rows]
+            out = [s for s in out if s[1] is not None and s[2] is not None]
+            out.sort(key=lambda s: s[6] if s[6] is not None else 99)
+            return json.dumps({"catalog": label, "service": service, "epoch_mjd": epoch, "w2max": w2max,
+                               "columns": ["name", "ra", "dec", "pmra", "pmdec", "w1", "w2"],
+                               "sources": out[:WISE_MAX_SOURCES], "truncated": len(out) >= WISE_MAX_SOURCES,
+                               "source": f"{label} from NASA/IPAC IRSA ({service})"}, separators=(",", ":"))
+    raise RuntimeError("; ".join(errors))
+
+
+@app.get("/api/wise")
+def wise():
+    """WISE sources (W2 < w2max) within radius_deg of (ra, dec): CatWISE2020, else AllWISE."""
+    try:
+        ra, dec = parse_position()
+        radius = float(request.args.get("radius", 0.1))
+        w2max = float(request.args.get("w2max", 17))
+    except ValueError as e:
+        return bad(str(e))
+    if not 0.001 <= radius <= 0.4:
+        return bad("radius must be between 0.001 and 0.4 degrees")
+    if not 5 <= w2max <= 18:
+        return bad("w2max must be between 5 and 18")
+    try:
+        text = wise_cone(round(ra, 5), round(dec, 5), round(radius, 4), round(w2max, 1))
+    except Exception as e:
+        app.logger.warning("WISE query failed: %s", e)
+        return bad(f"WISE query at IRSA failed: {e}", 502)
     resp = Response(text, mimetype="application/json")
     resp.headers["Cache-Control"] = "public, max-age=86400"
     return resp

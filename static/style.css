@@ -153,7 +153,11 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 /* Gaia overlay */
 .sky canvas.gaiacv { pointer-events: none; }
 .gaialbl { right: 12px; bottom: 10px; padding: 3px 8px; background: rgba(0,0,0,.6); color: #d0d0d0; font-size: 11px;
-  border-left: 3px solid #38bdf8; max-width: calc(100% - 140px); }
+  max-width: calc(100% - 140px); }
+.gaialbl > div { border-left: 3px solid #38bdf8; padding-left: 6px; margin-left: -8px; }
+.gaialbl > .ln-wise { border-left-color: #ffd23f; }
+.popsec-wise { color: #ffd23f; }
+.popcand { color: #ff7a5c; }
 .prow.wide { grid-column: 1 / -1; }
 .popsec { grid-column: 1 / -1; margin-top: 2px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,.2);
   font-size: 10px; letter-spacing: .06em; color: #38bdf8; font-weight: 700; }
