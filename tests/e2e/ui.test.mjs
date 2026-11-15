@@ -54,11 +54,42 @@ const litPixels = (p, sel) => p.$eval(sel, (c) => {
   return n;
 });
 const search = (p) => p.click("#goBtn");
+// Page 1 starts on the empty sky grid; type Barnard's Star's position (as a user would) and wait
+// for its SPHEREx picture.
+async function pickBarnard(p) {
+  await p.fill("#ra", "269.44626"); await p.fill("#dec", "+4.76832"); await p.press("#dec", "Tab");
+  await p.waitForFunction(() => pk.center && Math.abs(pk.center.ra - 269.44626) < 1e-4, null, { timeout: 10000 });
+  await previewReady(p);
+}
 
 // ================================================================== page 1: pick
 async function page1() {
   const p = await open();
-  await previewReady(p);
+  const requests = []; p.on("request", (r) => { if (/\/api\/(frames|cutout)/.test(r.url())) requests.push(r.url()); });
+  await check("P1 starts on an empty sky grid (black, lines only): nothing is downloaded until the user chooses", async () => {
+    assert(await p.isVisible("#pvMap") && await p.isHidden("#pvSky"), "map first");
+    await p.waitForTimeout(1500);
+    assert(!requests.length, "downloaded without user input: " + requests.join());
+    assert((await p.inputValue("#ra")) === "" && (await p.inputValue("#dec")) === "");
+    assert((await p.locator("#pvMap .ov, #pvMap button").count()) === 0, "no text or buttons on the grid");
+    const colours = await p.$eval("#pvMap canvas", (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i] !== d[i + 1] || d[i + 1] !== d[i + 2]) n++; return n; });
+    assert(colours === 0, "only gray lines on black");
+  });
+  const mp = await p.locator("#pvMap").boundingBox();
+  await check("P1 sky grid: hover reads RA / Dec; a click chooses the spot and then loads its picture", async () => {
+    const want = await p.evaluate(() => mapSky(mapSize().W * 0.35, mapSize().H * 0.45));
+    await p.mouse.move(mp.x + mp.width * 0.35, mp.y + mp.height * 0.45);
+    assert(/^RA\s+\d\dh \d\dm \d\d\.\ds\nDEC [+−]\d\d° \d\d′ \d\d″$/.test(await p.textContent("#pvMap .hovertag")), await p.textContent("#pvMap .hovertag"));
+    await p.mouse.click(mp.x + mp.width * 0.35, mp.y + mp.height * 0.45);
+    assert(near(parseFloat(await p.inputValue("#ra")), want.ra, 0.01) && near(parseFloat(await p.inputValue("#dec")), want.dec, 0.01));
+    assert(await p.isVisible("#pvSky") && await p.isVisible("#mapBtn"));
+    await p.waitForFunction(() => pk.center, null, { timeout: 5000 });
+    assert(requests.length > 0, "picture requested after the click");
+    await p.click("#mapBtn");
+    assert(await p.isVisible("#pvMap") && await p.isHidden("#pvSky"), "SKY MAP returns to the grid");
+  });
+  await pickBarnard(p);
 
   await check("P1 preview: a real SPHEREx image is drawn, labelled with the start preset", async () => {
     assert((await litPixels(p, "#pvSky canvas")) > 500, "canvas is blank");
@@ -69,7 +100,7 @@ async function page1() {
     const url = await newTab(p, () => p.click("#pvCredit a"));
     assert(url && url.startsWith("https://irsa.ipac.caltech.edu/ibe/data/spherex/"), "no tab: " + url);
   });
-  await check("P1 sidebar: fields filled from the start preset, preset highlighted", async () => {
+  await check("P1 sidebar: typed position recognised as a preset, preset highlighted", async () => {
     assert((await p.inputValue("#ra")) === "269.44626" && (await p.inputValue("#dec")) === "+4.76832");
     assert((await p.textContent("#raHint")) === "= 17h 57m 47.1s");
     assert((await p.locator(".pr.on").allTextContents()).join() === "Barnard's Star");
@@ -175,7 +206,7 @@ async function page1() {
     ["Space on the Search button", async (q) => { await q.focus("#goBtn"); await q.keyboard.press(" "); }],
     ["Enter in the Dec field", async (q) => { await q.press("#dec", "Enter"); }],
   ]) {
-    const q = await open(); await previewReady(q);
+    const q = await open(); await pickBarnard(q);
     await check(`P1 keyboard search: ${label}`, async () => { await act(q); await q.waitForTimeout(200); assert(await q.isVisible("#explore")); });
     await close(q);
   }
@@ -641,7 +672,9 @@ async function ux() {
 
   const hp = await open("", { viewport: { width: 1366, height: 768 } });
   await check("HELP the i button on page 1 opens one screen explaining every field; Esc closes it", async () => {
+    assert(await hp.evaluate(() => [...document.querySelectorAll(".infobtn")].every((b) => b.classList.contains("attn"))), "pulses before first use");
     await hp.click('[data-help="helpPick"]');
+    assert(await hp.evaluate(() => ![...document.querySelectorAll(".infobtn")].some((b) => b.classList.contains("attn"))), "stops after first use");
     const d = hp.locator("#helpPick");
     assert(await d.isVisible());
     const t = await d.textContent();
@@ -692,6 +725,7 @@ async function failures() {
 
   p = await open("", { setup: routeJSON("**/api/frames*", 502, { error: "busy" }) });
   await check("FAIL preview can't load: page 1 explains, the rest still works", async () => {
+    await p.fill("#ra", "269.44626"); await p.fill("#dec", "+4.76832"); await p.press("#dec", "Tab");
     await p.waitForFunction(() => /Could not load/.test(document.getElementById("pvLoadingText").textContent), null, { timeout: 20000 });
     assert((await p.locator(".pr").count()) === 5);
   });
@@ -738,7 +772,6 @@ async function layout() {
     side: document.querySelector(".side").scrollHeight - document.querySelector(".side").clientHeight }));
   for (const [name, opts] of sizes) {
     const p = await open("", opts);
-    await previewReady(p);
     await check(`LAYOUT ${name}: page 1 fits (no page or sidebar scrolling)`, async () => {
       const m = await overflow(p); assert(m.v <= 0 && m.h <= 0 && m.side <= 1, JSON.stringify(m));
     });
@@ -752,6 +785,10 @@ async function layout() {
         }).map((e) => e.id || e.className || e.textContent);
       });
       assert(!hits.length, hits.join());
+    });
+    await pickBarnard(p);
+    await check(`LAYOUT ${name}: page 1 with a picture fits too`, async () => {
+      const m = await overflow(p); assert(m.v <= 0 && m.h <= 0 && m.side <= 1, JSON.stringify(m));
     });
     await check(`LAYOUT ${name}: Search works`, async () => { await search(p); assert(await p.isVisible("#explore")); });
     await exploreReady(p);

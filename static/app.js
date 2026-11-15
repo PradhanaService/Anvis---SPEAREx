@@ -343,7 +343,6 @@ const PRESETS = [
   { name: "R Draconis",     kind: "Mira variable",      ra: 248.167611, dec: 66.754979 },  // SIMBAD "V* R Dra"
 ];
 const PRESET_SIZE_ARCMIN = 10, PRESET_BAND = "SPHEREx-D3";
-const START_PRESET = "Barnard's Star";   // shown on 01 PICK when the page opens
 
 const bandShort = (b) => b.slice(-2);
 const sameSky = (a, b) => a && b && Math.abs(a.ra - b.ra) < 1e-5 && Math.abs(a.dec - b.dec) < 1e-5;
@@ -386,6 +385,7 @@ function pvLoading(text, spinner = true) {
 
 // Show the most recent SPHEREx image around `center` (30′ wide; height follows the viewer's shape).
 async function loadPreview(center) {
+  showPickView("image");
   const id = ++pk.loadId, band = $("band").value;
   pk.center = { ...center }; pk.band = band;
   const r = pvView.rect();
@@ -462,7 +462,7 @@ function setPick(c, fillInputs) {
     $("ra").value = c.ra.toFixed(5); $("dec").value = (c.dec >= 0 ? "+" : "") + c.dec.toFixed(5);
     $("err").hidden = true;
   }
-  updateHints(); updatePickLabel(); placePickMarks(); updateEstimate();
+  updateHints(); updatePickLabel(); placePickMarks(); updateEstimate(); drawMap();
 }
 
 function updateHints() {
@@ -492,6 +492,107 @@ function onTyped() {
   if (!p || !pvView.inside(p.ix, p.iy)) loadPreview(c);
 }
 
+// ---- whole-sky map: what page 1 shows until a spot is chosen (nothing is downloaded before that).
+// A plain black grid of the whole sky (lines only): RA 360° → 0° from left to right (east left,
+// as on the images), Dec −90° → +90° from bottom to top. Hover reads RA / Dec; a click chooses
+// that spot (fills RA / Dec and loads the SPHEREx picture there); scroll zooms, drag moves.
+const mapBox = $("pvMap"), mapCv = mapBox.querySelector("canvas");
+const map = { z: 1, ra0: 180, dec0: 0, drag: null };
+function mapSize() { const r = mapBox.getBoundingClientRect(); return { W: r.width, H: r.height, r }; }
+function mapScale() { const { W, H } = mapSize(); return Math.min(W / 360, H / 180) * 0.97 * map.z; }   // px per degree
+function mapClamp() {
+  const { W, H } = mapSize(), s = mapScale(), hw = W / 2 / s, hh = H / 2 / s;
+  map.ra0 = 2 * hw >= 360 ? 180 : Math.min(360 - hw, Math.max(hw, map.ra0));
+  map.dec0 = 2 * hh >= 180 ? 0 : Math.min(90 - hh, Math.max(-90 + hh, map.dec0));
+}
+function mapXY(ra, dec) { const { W, H } = mapSize(), s = mapScale(); return { x: W / 2 + (map.ra0 - ra) * s, y: H / 2 - (dec - map.dec0) * s }; }
+function mapSky(x, y) { const { W, H } = mapSize(), s = mapScale(); return { ra: map.ra0 - (x - W / 2) / s, dec: map.dec0 - (y - H / 2) / s }; }
+const onSky = (c) => c.ra >= 0 && c.ra < 360 && c.dec >= -90 && c.dec <= 90;
+function drawMap() {
+  if (mapBox.hidden) return;
+  mapClamp();
+  const { W, H } = mapSize(), dpr = Math.min(2, window.devicePixelRatio || 1), s = mapScale();
+  if (mapCv.width !== Math.round(W * dpr) || mapCv.height !== Math.round(H * dpr)) { mapCv.width = Math.round(W * dpr); mapCv.height = Math.round(H * dpr); }
+  const c = mapCv.getContext("2d");
+  c.setTransform(dpr, 0, 0, dpr, 0, 0);
+  c.fillStyle = "#000"; c.fillRect(0, 0, W, H);
+  const a = mapXY(360, 90), b = mapXY(0, -90);
+  c.lineWidth = 1;
+  // Grid lines only: the finest step that keeps lines at least ~60 px apart.
+  const steps = [30, 15, 10, 5, 2, 1, 0.5, 0.25, 0.1];
+  const raStep = steps.filter((d) => d * s >= 60).pop() || 30, decStep = steps.filter((d) => d * s >= 60).pop() || 30;
+  c.strokeStyle = "rgba(255,255,255,.16)";
+  for (let ra = 0; ra <= 360 + 1e-9; ra += raStep) {
+    const x = mapXY(ra, 0).x; if (x < a.x - 1 || x > b.x + 1) continue;
+    c.beginPath(); c.moveTo(x, Math.max(0, a.y)); c.lineTo(x, Math.min(H, b.y)); c.stroke();
+  }
+  for (let dec = -90; dec <= 90 + 1e-9; dec += decStep) {
+    const y = mapXY(0, dec).y; if (y < a.y - 1 || y > b.y + 1) continue;
+    c.beginPath(); c.moveTo(Math.max(0, a.x), y); c.lineTo(Math.min(W, b.x), y); c.stroke();
+  }
+  if (pk.pick) {
+    const p = mapXY(pk.pick.ra, pk.pick.dec);
+    c.strokeStyle = "#E03C31"; c.lineWidth = 2; c.beginPath(); c.arc(p.x, p.y, 10, 0, 2 * Math.PI); c.stroke();
+  }
+}
+function mapHover(x, y) {
+  const show = x !== null && onSky(mapSky(x, y));
+  mapBox.querySelector(".cross-h").hidden = mapBox.querySelector(".cross-v").hidden = !show;
+  const tag = mapBox.querySelector(".hovertag"); tag.hidden = !show;
+  if (!show) return;
+  const { W, H } = mapSize(), q = mapSky(x, y);
+  mapBox.querySelector(".cross-h").style.top = y + "px"; mapBox.querySelector(".cross-v").style.left = x + "px";
+  tag.innerHTML = `<b>RA </b> ${esc(fmtRA(q.ra))}\n<b>DEC</b> ${esc(fmtDec(q.dec))}`;
+  tag.style.left = x + "px"; tag.style.top = y + "px";
+  tag.style.transform = (x > W * 0.7 ? "translate(calc(-100% - 14px), " : "translate(14px, ") + (y > H * 0.8 ? "calc(-100% - 14px))" : "14px)");
+}
+function mapZoomAt(x, y, z) {
+  const before = mapSky(x, y);
+  map.z = Math.max(1, Math.min(200, z));
+  const after = mapSky(x, y);
+  map.ra0 += before.ra - after.ra; map.dec0 += before.dec - after.dec;
+  drawMap();
+}
+const mapLocal = (e) => { const r = mapSize().r; return { x: e.clientX - r.left, y: e.clientY - r.top }; };
+mapBox.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0 || e.target.closest("button")) return;
+  map.drag = { x: e.clientX, y: e.clientY, ra0: map.ra0, dec0: map.dec0, moved: false };
+  mapBox.setPointerCapture(e.pointerId);
+});
+mapBox.addEventListener("pointermove", (e) => {
+  const d = map.drag, p = mapLocal(e);
+  if (d) {
+    if (Math.abs(e.clientX - d.x) + Math.abs(e.clientY - d.y) > 4) { d.moved = true; mapBox.classList.add("dragging"); }
+    if (d.moved) { const s = mapScale(); map.ra0 = d.ra0 + (e.clientX - d.x) / s; map.dec0 = d.dec0 + (e.clientY - d.y) / s; drawMap(); }
+  }
+  mapHover(d && d.moved ? null : p.x, p.y);
+});
+mapBox.addEventListener("pointerup", (e) => {
+  const d = map.drag; map.drag = null; mapBox.classList.remove("dragging");
+  if (!d || d.moved) return;
+  const p = mapLocal(e), q = mapSky(p.x, p.y);
+  if (!onSky(q)) return;
+  mapHover(null);
+  setPick(q, true); loadPreview(q);        // the user's choice: now fetch the SPHEREx picture there
+});
+mapBox.addEventListener("pointerleave", () => { map.drag = null; mapBox.classList.remove("dragging"); mapHover(null); });
+mapBox.addEventListener("wheel", (e) => { e.preventDefault(); const p = mapLocal(e); mapZoomAt(p.x, p.y, map.z * (e.deltaY < 0 ? 1.25 : 1 / 1.25)); }, { passive: false });
+new ResizeObserver(() => drawMap()).observe(mapBox);
+// Map or picture on page 1; the SKY MAP button returns to the map, centred on the chosen spot.
+function showPickView(v) {
+  const toMap = v === "map";
+  mapBox.hidden = !toMap; pvBox.hidden = toMap;
+  document.querySelector("#pick .topbar").hidden = toMap;   // zoom row and SKY MAP belong to the picture
+  $("pvZoom").style.visibility = toMap ? "hidden" : "";
+  $("mapBtn").hidden = toMap;
+  if (toMap) {
+    pk.loadId++; pvLoading("");            // stop waiting for a picture
+    if (pk.pick) { map.ra0 = pk.pick.ra; map.dec0 = pk.pick.dec; }
+    requestAnimationFrame(drawMap);
+  } else requestAnimationFrame(() => pvView.draw());
+}
+$("mapBtn").addEventListener("click", () => showPickView("map"));
+
 function runSearch() {      // returns true when the search starts
   const c = typedPosition(true);
   if (!c) return false;
@@ -512,7 +613,7 @@ $("ra").addEventListener("input", updateHints);
 $("dec").addEventListener("input", updateHints);
 $("ra").addEventListener("change", onTyped);
 $("dec").addEventListener("change", onTyped);
-$("band").addEventListener("change", () => { loadPreview(pk.center); updateEstimate(); });
+$("band").addEventListener("change", () => { if (pvBox.hidden || !pk.center) { updatePickLabel(); drawMap(); } else loadPreview(pk.center); updateEstimate(); });
 $("size").addEventListener("input", () => {
   const h = heightArcsec();
   $("sizeVal").textContent = h ? fmtArc(h) : "";
@@ -1517,9 +1618,18 @@ function readHash() {
 // ======================================================================
 // ---- help screens: each i button opens the explanation of its page (a modal dialog: Esc,
 // the × button or a click outside closes it, and focus returns to the i button).
-document.querySelectorAll(".infobtn").forEach((b) => b.addEventListener("click", () => {
-  stop(); $(b.dataset.help).showModal();
-}));
+// Until help has been opened once (remembered in this browser), the i buttons pulse gently.
+const HELP_KEY = "anvis.helpSeen";
+let helpSeen = false;
+try { helpSeen = localStorage.getItem(HELP_KEY) === "1"; } catch { /* storage blocked */ }
+document.querySelectorAll(".infobtn").forEach((b) => {
+  b.classList.toggle("attn", !helpSeen);
+  b.addEventListener("click", () => {
+    stop(); $(b.dataset.help).showModal();
+    document.querySelectorAll(".infobtn").forEach((x) => x.classList.remove("attn"));
+    try { localStorage.setItem(HELP_KEY, "1"); } catch { /* fine */ }
+  });
+});
 document.querySelectorAll("dialog.help").forEach((d) => {
   d.querySelector("[data-close]").addEventListener("click", () => d.close());
   d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // the backdrop
@@ -1548,8 +1658,7 @@ function initHint() {
     pk.pick = c; pk.center = { ...c }; updateHints(); updatePickLabel();
     openExplore(c);
   } else {
-    const s = PRESETS.find((p) => p.name === START_PRESET);
-    setPick({ ra: s.ra, dec: s.dec }, true);
-    loadPreview(s);
+    showPickView("map");     // start on the whole-sky map: nothing is downloaded until the user chooses
+    updateHints(); updatePickLabel(); updateEstimate();
   }
 })();
