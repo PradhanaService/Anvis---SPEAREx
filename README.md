@@ -168,6 +168,11 @@ python app.py
 Then open http://localhost:8000 and pick a preset, or open a link such as
 http://localhost:8000/#ra=269.446259&dec=4.768324 (Barnard's Star).
 
+Speed: a first search of a position waits for IRSA's image search (about 20 s at the moment;
+it is slow on IRSA's side). The five presets are searched in the background when the server
+starts, so they open at once; choosing a spot on page 1 starts its search straight away, and
+Search reuses it. Repeat searches in the same session are instant.
+
 Settings (environment variables): `ANVIS_COLLECTIONS` (releases, see below), `ANVIS_CACHE_MB`
 (memory cache for frames and stacks, default 300), `ANVIS_CACHE` (folder for cached
 wavelength tables, default `cache/`).

@@ -24,7 +24,8 @@ Endpoints
                          every SPHEREx collection IRSA has there
 
 Caches (all in memory unless noted)
-  * IRSA searches (sia_rows), Gaia and WISE cones: functools.lru_cache.
+  * IRSA searches (sia_rows), Gaia and WISE cones: functools.lru_cache. The five preset
+    positions are searched in the background when the server starts (warm_presets).
   * Processed frames and stacks: FrameCache, limited by size (ANVIS_CACHE_MB, default 300 MB).
   * WCS-WAVE wavelength tables: in memory and on disk in cache/ (ANVIS_CACHE).
 Replies of more than 2 kB of JSON are gzip-compressed when the browser accepts it.
@@ -128,6 +129,32 @@ def compress(resp):
     return resp
 
 
+# The five preset targets (as in PRESETS in static/app.js). Their IRSA searches are run in the
+# background when the server starts, so a preset opens without the ~20 s wait for IRSA.
+PRESET_POSITIONS = ((133.795129, -7.245147), (269.446259, 4.768324), (331.096669, -56.800649),
+                    (76.956526, 30.401438), (248.167611, 66.754979))
+_warm_started = threading.Event()
+
+
+def warm_presets():
+    """Search the presets side by side (5 requests, within the limit of 10 at a time)."""
+    def one(pos):
+        try:
+            sia_rows(round(pos[0], 6), round(pos[1], 6))
+        except Exception as e:      # IRSA busy: the preset will simply search when clicked
+            app.logger.warning("preset warm-up failed for %s: %s", pos, e)
+    with cf.ThreadPoolExecutor(len(PRESET_POSITIONS)) as ex:
+        list(ex.map(one, PRESET_POSITIONS))
+
+
+@app.before_request
+def start_warm_up():
+    """Start warm_presets once, with the first request (not in tests, which have no network)."""
+    if not app.testing and not _warm_started.is_set():
+        _warm_started.set()
+        threading.Thread(target=warm_presets, daemon=True).start()
+
+
 @app.get("/")
 def index():
     """The single-page app; its CSS and JS are served from static/ by Flask."""
@@ -138,8 +165,34 @@ def index():
 SIA_COLUMNS = ("energy_bandpassname", "dataproduct_subtype", "access_url", "obs_id", "obs_collection", "t_min")
 
 
-@lru_cache(maxsize=256)
+# One SIA search takes ~20 s at IRSA. If the same position is asked for again while a search is
+# still running (page 1 starts it for the download estimate, then Search asks again), the second
+# request waits for the first instead of starting another identical search.
+_sia_lock = threading.Lock()
+_sia_running = {}   # (ra, dec) -> Future of the search in progress
+
+
 def sia_rows(ra, dec):
+    """All SPHEREx images (every band) covering a position (see _sia_search); one search at a time per position."""
+    key = (ra, dec)
+    with _sia_lock:
+        fut, mine = _sia_running.get(key), False
+        if fut is None:
+            fut, mine = cf.Future(), True
+            _sia_running[key] = fut
+    if mine:
+        try:
+            fut.set_result(_sia_search(ra, dec))
+        except Exception as e:
+            fut.set_exception(e)
+        finally:
+            with _sia_lock:
+                _sia_running.pop(key, None)
+    return fut.result()
+
+
+@lru_cache(maxsize=256)
+def _sia_search(ra, dec):
     """All SPHEREx images (every band) covering a position, from IRSA's SIA service. Cached."""
     params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "20000")]
     params += [("COLLECTION", c) for c in COLLECTIONS]

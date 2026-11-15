@@ -310,3 +310,40 @@ def test_collections_endpoint(client, monkeypatch):
         {"collection": "spherex_dr1", "label": "DR1", "images": 2, "in_use": "spherex_dr1" in app.COLLECTIONS},
         {"collection": "spherex_qr3_deep", "label": "QR3 Deep", "images": 1, "in_use": False}]
     assert client.get("/api/collections?ra=400&dec=10").status_code == 400
+
+
+# ----------------------------------------------------------------------------- one IRSA search per position
+def test_simultaneous_searches_of_one_position_share_one_irsa_query(monkeypatch):
+    import threading
+    import time as _time
+    calls = []
+
+    def slow_search(ra, dec):
+        calls.append((ra, dec))
+        _time.sleep(0.3)                       # IRSA takes a while
+        return ({"obs_id": "A"},)
+    monkeypatch.setattr(app, "_sia_search", slow_search)
+    out = []
+    threads = [threading.Thread(target=lambda: out.append(app.sia_rows(1.0, 2.0))) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert calls == [(1.0, 2.0)] and out == [({"obs_id": "A"},)] * 4
+    app.sia_rows(1.0, 3.0)                     # another position: its own search
+    assert len(calls) == 2 and app._sia_running == {}
+
+
+def test_a_failed_shared_search_fails_for_every_waiting_request(monkeypatch):
+    def busy(ra, dec):
+        raise RuntimeError("IRSA is busy")
+    monkeypatch.setattr(app, "_sia_search", busy)
+    with pytest.raises(RuntimeError):
+        app.sia_rows(5.0, 5.0)
+    assert app._sia_running == {}              # nothing left behind: the next request tries again
+
+
+def test_preset_warm_up_is_not_started_in_tests(client, monkeypatch):
+    monkeypatch.setattr(app, "warm_presets", lambda: pytest.fail("no network in tests"))
+    client.get("/")
+    assert not app._warm_started.is_set()
