@@ -455,14 +455,60 @@ function onTyped() {
   if (!p || !pvView.inside(p.ix, p.iy)) loadPreview(c);
 }
 
-function runSearch() {
+function runSearch() {      // returns true when the search starts
   const c = typedPosition(true);
-  if (!c) return;
-  if (!heightArcsec()) { $("err").hidden = false; $("err").textContent = "Height should be 1–10 arcmin."; return; }
+  if (!c) return false;
+  if (!heightArcsec()) { $("err").hidden = false; $("err").textContent = "Height should be 1–10 arcmin."; return false; }
   pk.pick = c;
   writeHash(c);
   openExplore(c);
+  return true;
 }
+
+// ---- slide to search: drag the red handle to the right end; letting go early springs it back.
+const goBtn = $("goSlide"), goKnob = goBtn.querySelector(".gocirc"), goFill = goBtn.querySelector(".gofill"), goLbl = goBtn.querySelector(".golbl");
+const GO_DONE = 0.85;    // fraction of the track that counts as "slid"
+let goDrag = null;
+const goMax = () => Math.max(1, goBtn.clientWidth - goKnob.offsetWidth - 2 * goKnob.offsetLeft);
+function goSet(x) {
+  goKnob.style.transform = `translateX(${x}px)`;
+  goFill.style.width = x > 0 ? `${x + goKnob.offsetWidth + goKnob.offsetLeft}px` : "0";
+  goLbl.style.opacity = String(Math.max(0, 1 - (x / goMax()) * 1.6));   // the label fades as the handle moves
+}
+function goReset() {
+  goBtn.classList.add("snap"); goSet(0);
+  setTimeout(() => goBtn.classList.remove("snap"), 260);
+}
+goBtn.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  goDrag = { x0: e.clientX, x: 0, moved: false };
+  goBtn.setPointerCapture(e.pointerId); goBtn.classList.add("sliding"); goBtn.classList.remove("snap", "nudge");
+});
+goBtn.addEventListener("pointermove", (e) => {
+  if (!goDrag) return;
+  goDrag.x = Math.max(0, Math.min(goMax(), e.clientX - goDrag.x0));
+  if (goDrag.x > 3) goDrag.moved = true;
+  goSet(goDrag.x);
+});
+function goEnd() {
+  if (!goDrag) return;
+  const d = goDrag; goDrag = null; goBtn.classList.remove("sliding");
+  if (d.x >= goMax() * GO_DONE) {
+    goSet(goMax());
+    if (runSearch()) setTimeout(goReset, 400); else goReset();
+  } else {
+    goReset();
+    if (!d.moved) { void goBtn.offsetWidth; goBtn.classList.add("nudge"); setTimeout(() => goBtn.classList.remove("nudge"), 700); }
+  }
+}
+goBtn.addEventListener("pointerup", goEnd);
+goBtn.addEventListener("pointercancel", goEnd);
+// Keyboard: Enter or Space on the control searches (a click without sliding only nudges).
+goBtn.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); runSearch(); } });
+// Enter in the RA / Dec / Height fields still searches.
+["ra", "dec", "size"].forEach((id) => $(id).addEventListener("keydown", (e) => {
+  if (e.key === "Enter") { e.preventDefault(); $(id).dispatchEvent(new Event("change")); runSearch(); }
+}));
 
 $("ra").addEventListener("input", updateHints);
 $("dec").addEventListener("input", updateHints);

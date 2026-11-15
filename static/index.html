@@ -48,13 +48,16 @@
         </select>
       </div>
       <p id="err" class="err" role="alert" hidden></p>
-      <button class="go" type="submit">SEARCH<span class="gocirc"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#ffffff" stroke-width="2" aria-hidden="true"><path d="M3 9h11M10 4.5L14.5 9 10 13.5"></path></svg></span></button>
+      <button class="go" type="button" id="goSlide" aria-label="Search: slide the arrow to the right, or press Enter">
+        <span class="gofill" aria-hidden="true"></span>
+        <span class="golbl" aria-hidden="true">SLIDE TO SEARCH</span>
+        <span class="gocirc" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 18 18" fill="none" stroke="#ffffff" stroke-width="2" aria-hidden="true"><path d="M3 9h11M10 4.5L14.5 9 10 13.5"></path></svg></span>
+      </button>
     </form>
 
     <div class="presetbox">
       <span class="ptitle">PRESETS</span>
       <div role="group" aria-label="Preset targets" class="presets" id="presets"></div>
-      <span class="disclaim">Independent prototype using NASA SPHEREx data from IRSA. Not an official NASA website.</span>
     </div>
   </aside>
 

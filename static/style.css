@@ -13,7 +13,7 @@ button, input, select { font: inherit; }
 .app { height: 100vh; height: 100dvh; min-height: 480px; padding: 10px; overflow: hidden; display: flex; gap: 10px; }
 
 /* ---------------- 01 PICK ---------------- */
-.side { flex: 0 0 260px; border: 1px solid #0b0b0b; padding: 12px 12px; display: flex; flex-direction: column;
+.side { flex: 0 0 260px; align-self: flex-start; max-height: 100%; border: 1px solid #0b0b0b; padding: 12px 12px; display: flex; flex-direction: column;
   gap: 10px; overflow-y: auto; }
 .brand { display: flex; align-items: center; gap: 8px; padding-bottom: 8px; border-bottom: 1px solid #d9d9d9; }
 .bname { font-weight: 900; font-size: 15px; letter-spacing: .04em; }
@@ -32,13 +32,23 @@ select.fld { padding: 4px 8px; font-size: 13px; }
 .fld:focus { border-color: #E03C31; }
 .hint { font-family: 'DM Mono', monospace; font-size: 11px; color: #5c5c5c; }
 .err { margin: 0; font-size: 12px; font-weight: 500; color: #B42A13; }
-.go { display: flex; align-items: center; justify-content: space-between; gap: 8px; height: 44px; padding: 0 5px 0 18px; margin-top: 2px;
-  background: #0b0b0b; color: #fff; border: 0; border-radius: 999px; font-weight: 800; font-size: 15px; letter-spacing: .04em; cursor: pointer; }
+/* Slide to search: drag the red handle from left to right across the pill. */
+.go { position: relative; display: flex; align-items: center; justify-content: center; height: 44px; padding: 0 44px; margin-top: 2px;
+  background: #0b0b0b; color: #fff; border: 0; border-radius: 999px; font-weight: 800; font-size: 14px; letter-spacing: .06em;
+  cursor: pointer; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
 .go:hover { background: #262626; }
-.gocirc { width: 34px; height: 34px; border-radius: 50%; background: #E03C31; display: flex; align-items: center; justify-content: center; }
-.presetbox { margin-top: auto; display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid #d9d9d9; }
+.gofill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 999px; background: rgba(224,60,49,.45); pointer-events: none; }
+.golbl { position: relative; pointer-events: none; white-space: nowrap; }
+.gocirc { position: absolute; left: 5px; top: 50%; width: 34px; height: 34px; margin-top: -17px; border-radius: 50%; background: #E03C31;
+  display: flex; align-items: center; justify-content: center; cursor: grab; z-index: 1; }
+.go.sliding .gocirc { cursor: grabbing; }
+.go.snap .gocirc { transition: transform .25s ease; }
+.go.snap .gofill { transition: width .25s ease; }
+.go.snap .golbl { transition: opacity .25s ease; }
+.go.nudge .gocirc { animation: gonudge .7s ease; }
+@keyframes gonudge { 30% { transform: translateX(28px); } 60% { transform: translateX(0); } 80% { transform: translateX(10px); } 100% { transform: translateX(0); } }
+.presetbox { display: flex; flex-direction: column; gap: 6px; padding-top: 8px; border-top: 1px solid #d9d9d9; }
 .ptitle { font-size: 11px; font-weight: 700; letter-spacing: .08em; color: #5c5c5c; }
-.disclaim { font-size: 10px; line-height: 1.4; color: #5c5c5c; }
 .presets { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
 .pr { flex: 0 0 calc((100% - 12px) / 3); min-height: 40px; padding: 3px 3px; background: #fff; color: #0b0b0b;
   border: 1px solid #0b0b0b; cursor: pointer; font-size: 11px; font-weight: 700; line-height: 1.2; }
@@ -199,11 +209,10 @@ a.tab:hover { color: #0b0b0b; }
   .fld { height: 30px; font-size: 13px; }
   select.fld { font-size: 12px; }
   .hint { font-size: 10px; }
-  .go { height: 38px; font-size: 14px; }
-  .gocirc { width: 30px; height: 30px; }
+  .go { height: 38px; font-size: 13px; }
+  .gocirc { width: 30px; height: 30px; margin-top: -15px; left: 4px; }
   .presetbox { gap: 4px; padding-top: 6px; }
   .pr { min-height: 32px; font-size: 10.5px; }
-  .disclaim { font-size: 9.5px; line-height: 1.3; }
 }
 @media (max-height: 560px) and (min-width: 761px) {
   .hint { display: none; }
