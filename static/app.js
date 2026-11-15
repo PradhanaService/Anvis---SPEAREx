@@ -143,8 +143,7 @@ class SkyView {
     this.z = 1; this.tx = 0; this.ty = 0; this.drag = null;
     zoomScope.querySelectorAll("[data-zoom]").forEach((b) => b.addEventListener("click", () => {
       const r = this.rect();
-      if (b.dataset.zoom === "reset") this.resetView();
-      else this.zoomAt(r.width / 2, r.height / 2, this.z * (b.dataset.zoom === "in" ? 1.5 : 1 / 1.5));
+      this.zoomAt(r.width / 2, r.height / 2, this.z * (b.dataset.zoom === "in" ? 1.5 : 1 / 1.5));
     }));
     box.addEventListener("pointerdown", (e) => this.down(e));
     box.addEventListener("pointermove", (e) => this.move(e));
@@ -172,7 +171,6 @@ class SkyView {
     this.tx = this.clampAxis(this.tx, this.field.nx * k, r.width);
     this.ty = this.clampAxis(this.ty, this.field.ny * k, r.height);
   }
-  resetView() { this.z = 1; this.tx = 0; this.ty = 0; this.fitClamp(); this.draw(); }
   zoomAt(x, y, nz) {
     if (!this.field) return;
     nz = Math.max(1, Math.min(8, nz));
