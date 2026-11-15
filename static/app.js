@@ -180,7 +180,8 @@ class SkyView {
   }
 
   down(e) {
-    if (e.button !== 0 || !this.field) return;
+    // Presses on links or buttons over the image belong to them, not to pan / pick.
+    if (e.button !== 0 || !this.field || e.target.closest("a, button, .pop")) return;
     this.drag = { x: e.clientX, y: e.clientY, tx: this.tx, ty: this.ty, moved: false };
     this.box.setPointerCapture(e.pointerId);
   }
