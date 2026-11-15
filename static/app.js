@@ -521,7 +521,6 @@ $("size").addEventListener("input", () => {
   placePickMarks();
 });
 $("search").addEventListener("submit", (e) => { e.preventDefault(); runSearch(); });
-$("toExplore").addEventListener("click", (e) => { e.preventDefault(); runSearch(); });
 
 PRESETS.forEach((t) => {
   const b = document.createElement("button");

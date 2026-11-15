@@ -6,7 +6,7 @@ a { color: #0b0b0b; } a:hover { color: #E03C31; }
 .small { font-size: 11px; }
 [hidden] { display: none !important; }
 button, input, select { font: inherit; }
-.tb:focus-visible, .fld:focus-visible, .pr:focus-visible, .go:focus-visible, .tab:focus-visible, .zb:focus-visible,
+.tb:focus-visible, .fld:focus-visible, .pr:focus-visible, .go:focus-visible, .zb:focus-visible,
 .pb:focus-visible, .md:focus-visible, .sb:focus-visible, .fr:focus-visible, .cx:focus-visible, .bk:focus-visible,
 .sel:focus-visible, a:focus-visible { outline: 2px solid #E03C31; outline-offset: 2px; }
 
@@ -62,14 +62,6 @@ select.fld { padding: 4px 8px; font-size: 13px; }
   align-items: center; justify-content: center; }
 .tb:hover { background: #f0f0f0; }
 .zpct { margin-left: 6px; font-family: 'DM Mono', monospace; font-size: 12px; color: #5c5c5c; }
-.tabs { display: flex; align-items: stretch; height: 34px; font-size: 14px; }
-.tab { display: flex; align-items: center; gap: 6px; padding: 0 12px; border-bottom: 3px solid transparent; font-weight: 600;
-  color: #5c5c5c; text-decoration: none; }
-.tab.on { border-bottom-color: #E03C31; color: #0b0b0b; font-weight: 700; }
-.tab.on .num { color: #E03C31; }
-a.tab:hover { color: #0b0b0b; }
-.tab .num { font-family: 'DM Mono', monospace; font-size: 12px; }
-.tabsep { width: 1px; background: #0b0b0b; margin: 6px 0; }
 
 /* ---------------- sky viewer ---------------- */
 .sky { position: relative; flex: 1 1 auto; min-height: 0; border: 1px solid #0b0b0b; overflow: hidden;
