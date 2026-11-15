@@ -748,7 +748,9 @@ function renderPop() {
 }
 function positionPop() {
   const pop = $("pop"), r = exView.rect();
-  const p = exView.toScreen(ex.pick.ix, ex.pick.iy), pw = pop.offsetWidth || 280, ph = pop.offsetHeight || 220;
+  // The pop-up is capped at the image area's height (it scrolls inside if taller), so it always fits.
+  const p = exView.toScreen(ex.pick.ix, ex.pick.iy), pw = pop.offsetWidth || 280;
+  const ph = Math.min(pop.offsetHeight || 220, r.height - 16);
   let left = p.x < r.width * 0.6 ? p.x + 28 : p.x - pw - 28;
   left = Math.max(8, Math.min(r.width - pw - 8, left));
   const top = Math.max(8, Math.min(r.height - ph - 8, p.y - 60));
