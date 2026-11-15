@@ -306,7 +306,8 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   background: transparent; color: #0b0b0b; border: 1px solid #d0d0d0; border-radius: 50%; cursor: pointer; }
 .infobtn:hover { background: #f0f0f0; }
 .infobtn:focus-visible, .helpx:focus-visible { outline: 2px solid #E03C31; outline-offset: 2px; }
-.extopl { display: flex; align-items: center; gap: 10px; }
+.extopl { flex: 1; width: 100%; display: flex; align-items: center; gap: 10px; }
+.extopl .infobtn { margin-left: auto; }   /* the i button sits at the right end of the row */
 .help { width: min(1180px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-top: 4px solid #E03C31;
   background: #fff; color: #0b0b0b; box-shadow: 0 10px 40px rgba(0,0,0,.55); overflow: auto; }
 .help::backdrop { background: rgba(0,0,0,.6); }
