@@ -36,10 +36,20 @@ def client():
     "ra=360&dec=0",                      # RA out of range
     "ra=10&dec=91",                      # Dec out of range
     "ra=nan&dec=0",                      # NaN is rejected too
+    "ra=inf&dec=0",                      # and infinity
+    "ra=-0.1&dec=0",                     # RA below 0
+    "ra=10&dec=-90.01",                  # Dec below -90
 ])
 def test_frames_rejects_bad_positions(client, query):
     r = client.get("/api/frames?" + query)
     assert r.status_code == 400 and "error" in r.get_json()
+
+
+@pytest.mark.parametrize("ra, dec", [(0, -90), (359.9999, 90), (0, 0)])
+def test_position_edges_are_accepted(client, monkeypatch, ra, dec):
+    monkeypatch.setattr(app, "sia_rows", lambda ra, dec: ())
+    r = client.get(f"/api/frames?ra={ra}&dec={dec}&band=SPHEREx-D3")
+    assert r.status_code == 200 and r.get_json()["frames"] == []
 
 
 def test_frames_rejects_unknown_band(client):

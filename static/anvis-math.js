@@ -4,6 +4,24 @@
 // row-major array of numbers (MJy/sr) with null for "no data". The page loads this file before
 // app.js; the tests (tests/test_math.py) run it in node, which is why it ends with module.exports.
 
+// Typed coordinates -> decimal degrees, or null if not understood / out of range.
+// RA: degrees ("210.8"), or hours when there are several numbers or an "h" ("14 03 12.5",
+// "14h03m12.5s", "14:03:12.5", "14.05h"). Dec: degrees, or "±dd mm ss" (a leading - or − is south).
+function nums(s) { return (String(s).match(/\d+(?:\.\d+)?/g) || []).map(Number); }
+function parseRA(s) {
+  s = String(s).trim(); if (!s) return null;
+  const n = nums(s); if (!n.length) return null;
+  const v = (n.length >= 2 || /h/i.test(s)) ? (n[0] + (n[1] || 0) / 60 + (n[2] || 0) / 3600) * 15 : n[0];
+  return v >= 0 && v < 360 ? v : null;
+}
+function parseDec(s) {
+  s = String(s).trim(); if (!s) return null;
+  const neg = /^[-−]/.test(s); const n = nums(s); if (!n.length) return null;
+  let v = n.length >= 2 ? n[0] + n[1] / 60 + (n[2] || 0) / 3600 : n[0];
+  if (neg) v = -v;
+  return v >= -90 && v <= 90 ? v : null;
+}
+
 // Median and robust standard deviation (1.4826 × median absolute deviation) of the non-null
 // values. The MAD ignores stars and other outliers, so sigma measures the noise.
 function robustStats(values) {
@@ -88,4 +106,4 @@ function coreHoleRadius(cut, x, y, max = 10) {
   return r;
 }
 
-if (typeof module !== "undefined") module.exports = { robustStats, diffImage, DIFF_SIGMAS, DIFF_FLOOR, aperturePhotometry, APERTURE, MJY_PER_MJYSR_PIXEL, coreHoleRadius };
+if (typeof module !== "undefined") module.exports = { parseRA, parseDec, robustStats, diffImage, DIFF_SIGMAS, DIFF_FLOOR, aperturePhotometry, APERTURE, MJY_PER_MJYSR_PIXEL, coreHoleRadius };

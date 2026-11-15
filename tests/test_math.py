@@ -134,3 +134,37 @@ def test_core_hole_and_ring_photometry_for_saturated_stars():
     ring = js("m.aperturePhotometry(c, 15.5, 15.5, ap)", c=cut(img), ap=ap)
     brighter = js("m.aperturePhotometry(c, 15.5, 15.5, ap)", c=cut(np.where(hole, np.nan, _star_field(1000.0, sigma_px=2.5))), ap=ap)
     assert ring["nbad"] == 0 and brighter["flux"] == pytest.approx(2 * ring["flux"], rel=0.02)   # the halo scales with the star
+
+
+# ----------------------------------------------------------------------------- typed coordinates
+@pytest.mark.parametrize("typed, deg", [
+    ("210.8", 210.8), ("0", 0.0), ("359.999", 359.999),
+    ("14 03 12.5", (14 + 3 / 60 + 12.5 / 3600) * 15),          # hours, minutes, seconds
+    ("14h03m12.5s", (14 + 3 / 60 + 12.5 / 3600) * 15),
+    ("14:03:12.5", (14 + 3 / 60 + 12.5 / 3600) * 15),
+    ("14.05h", 14.05 * 15), ("8 55", (8 + 55 / 60) * 15),
+    ("  133.795129  ", 133.795129),
+])
+def test_parse_ra_accepts_degrees_and_hours(typed, deg):
+    assert js("m.parseRA(s)", s=typed) == pytest.approx(deg, abs=1e-9)
+
+
+@pytest.mark.parametrize("typed", ["", "   ", "abc", "360", "400", "24 00 00", "25h"])
+def test_parse_ra_rejects_bad_input(typed):
+    assert js("m.parseRA(s)", s=typed) is None
+
+
+@pytest.mark.parametrize("typed, deg", [
+    ("54.34895", 54.34895), ("+54.34895", 54.34895), ("-7.245147", -7.245147),
+    ("−07 14 42", -(7 + 14 / 60 + 42 / 3600)),                 # Unicode minus, as copied from papers
+    ("-00 30 00", -0.5),                                        # the sign counts even for 0°
+    ("+04 46 06", 4 + 46 / 60 + 6 / 3600), ("-56d48m02s", -(56 + 48 / 60 + 2 / 3600)),
+    ("90", 90.0), ("-90", -90.0),
+])
+def test_parse_dec_accepts_degrees_and_dms(typed, deg):
+    assert js("m.parseDec(s)", s=typed) == pytest.approx(deg, abs=1e-9)
+
+
+@pytest.mark.parametrize("typed", ["", "north", "95", "-90.5", "91 00 00"])
+def test_parse_dec_rejects_bad_input(typed):
+    assert js("m.parseDec(s)", s=typed) is None

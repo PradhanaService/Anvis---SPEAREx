@@ -28,21 +28,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // ---------------------------------------------------------------- coordinates
-// RA is typed as degrees or as hours ("14 03 12.5", "14h03m12.5s"); Dec as degrees or "±dd mm ss".
-function nums(s) { return (String(s).match(/\d+(?:\.\d+)?/g) || []).map(Number); }
-function parseRA(s) {
-  s = String(s).trim(); if (!s) return null;
-  const n = nums(s); if (!n.length) return null;
-  const v = (n.length >= 2 || /h/i.test(s)) ? (n[0] + (n[1] || 0) / 60 + (n[2] || 0) / 3600) * 15 : n[0];
-  return v >= 0 && v < 360 ? v : null;
-}
-function parseDec(s) {
-  s = String(s).trim(); if (!s) return null;
-  const neg = /^[-−]/.test(s); const n = nums(s); if (!n.length) return null;
-  let v = n.length >= 2 ? n[0] + n[1] / 60 + (n[2] || 0) / 3600 : n[0];
-  if (neg) v = -v;
-  return v >= -90 && v <= 90 ? v : null;
-}
+// parseRA / parseDec (typed coordinates -> degrees) are in anvis-math.js, where they are tested.
 const p2 = (n) => String(n).padStart(2, "0");
 function fmtRA(ra) {
   const t = Math.round((((ra % 360) + 360) % 360) / 15 * 36000) % 864000;
