@@ -281,6 +281,12 @@ class SkyView {
 }
 
 // ---------------------------------------------------------------- API
+// An error message in plain words: IRSA / MAST being busy or down is said as such.
+function plainError(e, who = "NASA's IRSA archive") {
+  const m = String((e && e.message) || e || "");
+  if (/busy|unavailable|timed? ?out|50[234]|proxy|failed to fetch|network/i.test(m)) return `${who} is busy or not answering right now. Please try again in a minute.`;
+  return m;
+}
 async function getJSON(url) {
   const r = await fetch(url);
   let j; try { j = await r.json(); } catch { throw new Error(r.statusText || "Bad response"); }
@@ -510,46 +516,7 @@ function runSearch() {      // returns true when the search starts
   return true;
 }
 
-// ---- slide to search: drag the red handle to the right end; letting go early springs it back.
-const goBtn = $("goSlide"), goKnob = goBtn.querySelector(".gocirc"), goFill = goBtn.querySelector(".gofill"), goLbl = goBtn.querySelector(".golbl");
-const GO_DONE = 0.85;    // fraction of the track that counts as "slid"
-let goDrag = null;
-const goMax = () => Math.max(1, goBtn.clientWidth - goKnob.offsetWidth - 2 * goKnob.offsetLeft);
-function goSet(x) {
-  goKnob.style.transform = `translateX(${x}px)`;
-  goFill.style.width = x > 0 ? `${x + goKnob.offsetWidth + goKnob.offsetLeft}px` : "0";
-  goLbl.style.opacity = String(Math.max(0, 1 - (x / goMax()) * 1.6));   // the label fades as the handle moves
-}
-function goReset() {
-  goBtn.classList.add("snap"); goSet(0);
-  setTimeout(() => goBtn.classList.remove("snap"), 260);
-}
-goBtn.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return;
-  goDrag = { x0: e.clientX, x: 0, moved: false };
-  goBtn.setPointerCapture(e.pointerId); goBtn.classList.add("sliding"); goBtn.classList.remove("snap", "nudge");
-});
-goBtn.addEventListener("pointermove", (e) => {
-  if (!goDrag) return;
-  goDrag.x = Math.max(0, Math.min(goMax(), e.clientX - goDrag.x0));
-  if (goDrag.x > 3) goDrag.moved = true;
-  goSet(goDrag.x);
-});
-function goEnd() {
-  if (!goDrag) return;
-  const d = goDrag; goDrag = null; goBtn.classList.remove("sliding");
-  if (d.x >= goMax() * GO_DONE) {
-    goSet(goMax());
-    if (runSearch()) setTimeout(goReset, 400); else goReset();
-  } else {
-    goReset();
-    if (!d.moved) { void goBtn.offsetWidth; goBtn.classList.add("nudge"); setTimeout(() => goBtn.classList.remove("nudge"), 700); }
-  }
-}
-goBtn.addEventListener("pointerup", goEnd);
-goBtn.addEventListener("pointercancel", goEnd);
-// Keyboard: Enter or Space on the control searches (a click without sliding only nudges).
-goBtn.addEventListener("keydown", (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); runSearch(); } });
+// ---- Search: the Search button submits the form (see the "submit" listener below).
 // Enter in the RA / Dec / Height fields still searches.
 ["ra", "dec", "size"].forEach((id) => $(id).addEventListener("keydown", (e) => {
   if (e.key === "Enter") { e.preventDefault(); $(id).dispatchEvent(new Event("change")); runSearch(); }
@@ -652,6 +619,7 @@ const ex = {
   lock: { stacks: true, frames: false }, curve: window.innerWidth > 760,
   pick: null,
   searchId: 0,
+  pending: {},   // from a shared link: item index (i), zoom (z) and image point at the centre (at), applied once
 };
 const VIEWS = ["stacks", "frames"];
 const STACK_PARALLEL = 2;   // epochs co-added at once (each one already fetches its images in parallel on the server)
@@ -659,7 +627,7 @@ const newList = () => ({ items: [], started: false, done: 0, failed: 0, finished
 const exBox = $("exSky");
 const exView = new SkyView(exBox, $("exZoom"), {
   onPick: (q) => { ex.pick = q; renderPop(); placeExMarks(); },
-  onChange: () => placeExMarks(),
+  onChange: () => { placeExMarks(); if (!ex.pending.z) scheduleHash(); },
 });
 
 // Loading overlay over the explore image (hidden when text is empty).
@@ -695,7 +663,7 @@ async function openExplore(c) {
   catch (e) {
     if (id !== ex.searchId) return;
     exLoading("");
-    showNoObs("Could not search IRSA", e.message + ". Go back and try again.");
+    showNoObs("Could not search IRSA", plainError(e) + " Go back and search again.");
     return;
   }
   if (id !== ex.searchId) return;
@@ -725,6 +693,7 @@ async function openExplore(c) {
   if (!ex.lists.stacks.items.length) ex.view = "frames";   // (an older server without epochs)
   ex.frames = ex.lists[ex.view].items;
   if (typeof ex.ref === "number" && ex.ref >= ex.frames.length) ex.ref = "prev";
+  if (ex.pending.i !== undefined) { ex.current = Math.min(ex.pending.i, ex.frames.length - 1); delete ex.pending.i; }
   buildStrip(); renderView(); setMode(ex.mode); writeHash(c);
   loadList(ex.view, id);
 }
@@ -858,6 +827,29 @@ function updateStrip() {
   }
 }
 
+// SPHEREx quality flags (FLAGS extension bit names) in plain words. Hovering or focusing a flag
+// shows the description from the image's own FITS header.
+const FLAG_WORDS = {
+  OVERFLOW: "saturated", NONLINEAR: "nearly saturated", BLOOM: "bleed from a bright star", TRANSIENT: "cosmic ray / glitch",
+  SNOWBALL: "cosmic-ray snowball", HOT: "hot pixel", COLD: "low-response pixel", NONFUNC: "dead pixel",
+  SUR_ERROR: "readout fit problem", DICHROIC: "filter-edge artefact", MISSING_DATA: "missing data",
+  CROSSTALK: "crosstalk", GHOST: "ghost of a bright star", GHOST_FPA: "ghost of a bright star", GHOST_EXT: "ghost of a bright star",
+  STREAK: "streak", PERSIST: "afterglow of an earlier source", HALO: "halo of a bright star", SATELLITE_HALO: "halo of a bright star",
+};
+function renderFlags(f) {
+  const el = $("metaFlags"), q = f && f.cut ? f.cut.quality || [] : null;
+  if (!q) { el.textContent = ""; return; }
+  if (!q.length) { el.textContent = "No quality flags at the target"; return; }
+  const max = window.matchMedia("(max-width: 760px)").matches ? 1 : 3;   // phones: room for one chip
+  const seen = new Set(), chips = q.filter((x) => { const w = FLAG_WORDS[x.name] || x.name; if (seen.has(w)) return false; seen.add(w); return true; });
+  el.innerHTML = `<span>${f.stack ? "Flagged in some images (left out of the stack):" : "Quality at the target:"}</span>` +
+    chips.slice(0, max).map((x) => {
+      const w = FLAG_WORDS[x.name] || x.name.toLowerCase(), d = `${x.name}: ${x.desc || "SPHEREx quality flag"}`;
+      return `<span class="qf" tabindex="0" title="${esc(d)}" aria-label="${esc(w + " – " + d)}">${esc(w)}</span>`;
+    }).join("") + (chips.length > max   // the rest in one chip, listed on hover
+      ? `<span class="qf" tabindex="0" title="${esc(chips.slice(max).map((x) => `${FLAG_WORDS[x.name] || x.name} (${x.name}): ${x.desc || ""}`).join("\n"))}">+${chips.length - max} more</span>` : "");
+}
+
 // "3 May – 12 Jun 2025": the first and last day of a survey epoch.
 function epochDays(s) {
   const a = shortDate(s.start), b = shortDate(s.end);
@@ -891,13 +883,13 @@ function showFrame() {
     const cut = shown.cut, wr = cut && cut.wavelength_range_um;
     $("shownDate").textContent = `Survey ${shown.epoch + 1} · ${epochDays(shown)}`;
     $("chanShort").textContent = (wr ? `λ ${wr[0].toFixed(2)}–${wr[1].toFixed(2)} µm · ` : "") +
-      `${cut ? cut.n_used : shown.n} frames stacked · ${bandShort(ex.band)} · 6.15″/px`;
+      `${cut ? cut.n_used : shown.n} frames stacked · ${bandShort(ex.band)} · ${release}`;
     $("exCredit").innerHTML = `SPHEREx ${release} · stack of ${shown.n} images from ` +
-      `<a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">IRSA</a> · each file: Single frames view`;
+      `<a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">IRSA</a><span class="lg"> · each file: Single frames view</span>`;
   } else {
     $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
     $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
-      `${bandShort(ex.band)} · 6.15″/px`;
+      `${bandShort(ex.band)} · ${release} · 6.15″/px`;
     $("exCredit").innerHTML = `SPHEREx ${release} · ${esc(shown.obs_id)} · ` +
       `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
   }
@@ -915,7 +907,8 @@ function showFrame() {
       exLoading(shown.failed ? "" : shown.stack ? `Co-adding survey ${shown.epoch + 1} (${shown.n} images)…` : "Retrieving this observation…");
     }
   }
-  if (exView.hasImage) exLoading("");
+  if (exView.hasImage) { exLoading(""); applyPendingZoom(); }
+  renderFlags(shown);
   renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks(); renderCurve();
 }
 
@@ -929,8 +922,8 @@ function renderMode() {
   const skipped = ex.ref === "prev" && ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
   const why = !f.cut ? "THIS ONE IS NOT LOADED"
     : ri >= 0 ? ""
-    : ex.ref === "prev" ? "NO EARLIER LOADED ONE TO COMPARE WITH"
-    : "THIS IS THE REFERENCE · PICK ANOTHER DATE";
+    : ex.ref === "prev" ? "NOTHING EARLIER TO COMPARE WITH"
+    : "THIS IS THE REFERENCE · PICK ANOTHER";
   if (ex.mode === "blink") {
     lbl.textContent = why ? `BLINK · ${why}` : `BLINK · ${up(p)} ↔ ${up(f)} · NOW ${up(ex.frames[shownIndex()])}${skipped}`;
   } else {
@@ -1056,8 +1049,8 @@ function nextLoadable(from, dir) {
 function go(i) {
   if (!ex.frames.length) return;
   ex.current = Math.max(0, Math.min(ex.frames.length - 1, i));
-  if (ex.frames[ex.current].failed) toast(ex.view === "stacks" ? "This survey epoch could not be co-added (IRSA busy?)" : "This observation could not be loaded from IRSA");
-  showFrame();
+  if (ex.frames[ex.current].failed) toast(ex.view === "stacks" ? "IRSA did not send this survey visit's images. Try again later, or switch to Frames." : "This observation could not be loaded from IRSA");
+  showFrame(); scheduleHash();
   if (ex.playing) schedule();
 }
 function schedule() {
@@ -1249,12 +1242,16 @@ function drawGaia() {
   const lines = [];
   if (gaia.on) lines.push(["gaia", drawGaiaLayer(ctx, r, dpr)]);
   if (wise.on) lines.push(["wise", drawWiseLayer(ctx, r, dpr)]);
-  lbl.innerHTML = lines.map(([k, t]) => `<div class="ln-${k}">${esc(t)}</div>`).join("");
+  // Each line has a long form and a short one for phones ([long, short], or one text for both).
+  lbl.innerHTML = lines.map(([k, t]) => {
+    const [lg, sh] = Array.isArray(t) ? t : [t, t];
+    return `<div class="ln-${k}"><span class="lg">${esc(lg)}</span><span class="sh">${esc(sh)}</span></div>`;
+  }).join("");
 }
 // Gaia rings for the image on screen; returns the label line.
 function drawGaiaLayer(ctx, r, dpr) {
   if (gaia.loading) return "GAIA DR3 · loading from MAST…";
-  if (gaia.error) return "GAIA DR3 · unavailable: " + gaia.error;
+  if (gaia.error) return "GAIA DR3 · unavailable: " + plainError(gaia.error, "MAST");
   const f = ex.frames[shownIndex()];
   if (!gaia.data || !exView.field || !exView.hasImage || !f) return "GAIA DR3";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1285,14 +1282,15 @@ function drawGaiaLayer(ctx, r, dpr) {
     }
   }
   const d = shortDate(f.date), when = f.stack ? `mid-survey ${f.epoch + 1}` : `${d.day} ${d.year}`;
-  return `GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${when}` +
-    (gaia.data.truncated ? ` · brightest ${gaia.data.stars.length} only` : "") + ` · arrows: ${GAIA_ARROW_YEARS}-yr motion`;
+  return [`GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${when}` +
+    (gaia.data.truncated ? ` · brightest ${gaia.data.stars.length} only` : "") + ` · arrows: ${GAIA_ARROW_YEARS}-yr motion`,
+    `GAIA · ${shown} stars`];
 }
 // Pop-up rows for the nearest Gaia star to sky position c at the given date.
 function gaiaPopRows(c, mjd) {
   const head = `<div class="popsec">GAIA DR3 · MAST</div>`;
   if (gaia.loading) return head + `<div class="popnote">Loading Gaia stars…</div>`;
-  if (gaia.error) return head + `<div class="popnote">Gaia unavailable: ${esc(gaia.error)}</div>`;
+  if (gaia.error) return head + `<div class="popnote">Gaia unavailable: ${esc(plainError(gaia.error, "MAST"))}</div>`;
   if (!gaia.data) return "";
   let best = null, bd = Infinity, n = 0;
   const cosd = Math.cos((c.dec * Math.PI) / 180);
@@ -1380,7 +1378,7 @@ function wiseCandidates() {
 // WISE squares for the image on screen (candidates in red, larger); returns the label line.
 function drawWiseLayer(ctx, r, dpr) {
   if (wise.loading) return "WISE · loading CatWISE2020 from IRSA (can take up to a minute)…";
-  if (wise.error) return "WISE · unavailable: " + wise.error;
+  if (wise.error) return "WISE · unavailable: " + plainError(wise.error, "IRSA");
   const f = ex.frames[shownIndex()];
   if (!wise.data || !exView.field || !exView.hasImage || !f) return "WISE";
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
@@ -1397,16 +1395,17 @@ function drawWiseLayer(ctx, r, dpr) {
     }
   });
   const d = wise.data;
-  return `${d.catalog.toUpperCase()} · W2 < ${d.w2max} · ${shown} sources` +
+  return [`${d.catalog.toUpperCase()} · W2 < ${d.w2max} · ${shown} sources` +
     (cand ? ` · ${nc} brown-dwarf candidate${nc === 1 ? "" : "s"} (red)` : gaia.error ? " · candidates need Gaia" : "") +
-    (d.truncated ? ` · brightest ${d.sources.length} only` : "");
+    (d.truncated ? ` · brightest ${d.sources.length} only` : ""),
+    `${d.catalog.toUpperCase()} · ${shown}` + (cand ? ` · ${nc} candidate${nc === 1 ? "" : "s"}` : "")];
 }
 // Pop-up rows for the nearest WISE source to sky position c at the given date.
 function wisePopRows(c, mjd) {
   if (!wise.on && !wise.data) return "";
   const head = `<div class="popsec popsec-wise">WISE · ${esc(wise.data ? wise.data.catalog : "CatWISE2020")} · IRSA</div>`;
   if (wise.loading) return head + `<div class="popnote">Loading WISE sources…</div>`;
-  if (wise.error) return head + `<div class="popnote">WISE unavailable: ${esc(wise.error)}</div>`;
+  if (wise.error) return head + `<div class="popnote">WISE unavailable: ${esc(plainError(wise.error, "IRSA"))}</div>`;
   if (!wise.data) return "";
   let best = -1, bd = Infinity;
   const cand = wiseCandidates();
@@ -1474,7 +1473,28 @@ function writeHash(c) {
   if (ex.ref !== "prev") p.set("ref", ex.ref);
   if (ex.lock[ex.view] !== (ex.view === "stacks")) p.set("lock", ex.lock[ex.view] ? 1 : 0);   // only when not the default
   if (ex.curve !== window.innerWidth > 760) p.set("curve", ex.curve ? 1 : 0);
+  if (!$("explore").hidden && ex.frames.length) {
+    if (ex.current) p.set("i", ex.current);                     // the image shown
+    if (exView.field && exView.z > 1.001) {                     // zoom and the image point at the centre
+      const r = exView.rect(), q = exView.toImage(r.width / 2, r.height / 2);
+      p.set("z", +exView.z.toFixed(2)); p.set("at", `${q.ix.toFixed(1)},${q.iy.toFixed(1)}`);
+    }
+  }
   history.replaceState(null, "", "#" + p.toString());
+}
+// Hash updates while playing, zooming or panning are batched: browsers limit how often a page
+// may change its address.
+let hashTimer = null;
+function scheduleHash() { clearTimeout(hashTimer); hashTimer = setTimeout(() => writeHash(ex.target), 300); }
+// Zoom and pan from a shared link, once the first image is on screen.
+function applyPendingZoom() {
+  const z = ex.pending.z; if (!z || !exView.field) return;
+  const at = ex.pending.at || { ix: exView.field.nx / 2, iy: exView.field.ny / 2 };
+  delete ex.pending.z; delete ex.pending.at;
+  exView.z = Math.max(1, Math.min(8, z));
+  const r = exView.rect(), k = exView.k();
+  exView.tx = r.width / 2 - at.ix * k; exView.ty = r.height / 2 - at.iy * k;
+  exView.fitClamp(); exView.draw();
 }
 function readHash() {
   const p = new URLSearchParams(location.hash.slice(1));
@@ -1497,6 +1517,11 @@ function readHash() {
   ex.ref = r === "first" ? "first" : /^\d+$/.test(r || "") ? Number(r) : "prev";
   if (p.has("lock")) ex.lock[ex.view] = p.get("lock") === "1";
   if (p.has("curve")) ex.curve = p.get("curve") === "1";
+  ex.pending = {};
+  if (/^\d+$/.test(p.get("i") || "")) ex.pending.i = Number(p.get("i"));
+  const z = Number(p.get("z")), at = (p.get("at") || "").split(",").map(Number);
+  if (z > 1 && z <= 8) ex.pending.z = z;
+  if (at.length === 2 && at.every(Number.isFinite)) ex.pending.at = { ix: at[0], iy: at[1] };
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }
@@ -1504,7 +1529,20 @@ function readHash() {
 // ======================================================================
 // Start: a link with #ra=…&dec=… opens page 2 directly; otherwise page 1 on the start preset.
 // ======================================================================
+// ---- first-time guide: shown until dismissed (remembered in this browser, if storage works)
+const HINT_KEY = "anvis.hintDismissed";
+function initHint() {
+  let seen = false;
+  try { seen = localStorage.getItem(HINT_KEY) === "1"; } catch { /* storage blocked: show it */ }
+  $("firstHint").hidden = seen;
+  $("firstHintClose").addEventListener("click", () => {
+    $("firstHint").hidden = true;
+    try { localStorage.setItem(HINT_KEY, "1"); } catch { /* fine: hidden for this visit */ }
+  });
+}
+
 (function start() {
+  initHint();
   loadReleases();
   const c = readHash();
   $("size").dispatchEvent(new Event("input"));

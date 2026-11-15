@@ -38,21 +38,15 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .range { width: 100%; height: clamp(22px, 3vh, 30px); margin: 0; accent-color: #E03C31; cursor: pointer; }
 .err { margin: 0; font-size: 12px; font-weight: 500; color: #B42A13; }
 /* Slide to search: drag the red handle from left to right across the pill. */
-.go { --goh: clamp(38px, 7.2vh, 64px); position: relative; display: flex; align-items: center; justify-content: center; height: var(--goh);
-  padding: 0 10px 0 calc(var(--goh) + 2px); margin-top: 2px;
-  background: #0b0b0b; color: #fff; border: 0; border-radius: 999px; font-weight: 800; font-size: clamp(13px, 1.8vh, 15px); letter-spacing: .05em;
-  cursor: pointer; overflow: hidden; touch-action: none; user-select: none; -webkit-user-select: none; }
+/* Search: the primary button (dark pill with the red arrow, as in the design). */
+.go { --goh: clamp(38px, 7.2vh, 60px); position: relative; display: flex; align-items: center; justify-content: center; gap: 10px;
+  height: var(--goh); padding: 0 6px 0 18px; margin-top: 2px; background: #0b0b0b; color: #fff; border: 0; border-radius: 999px;
+  font-weight: 800; font-size: clamp(13px, 1.8vh, 15px); letter-spacing: .08em; cursor: pointer; }
 .go:hover { background: #262626; }
-.gofill { position: absolute; left: 0; top: 0; bottom: 0; width: 0; border-radius: 999px; background: rgba(224,60,49,.45); pointer-events: none; }
-.golbl { position: relative; pointer-events: none; white-space: nowrap; }
-.gocirc { position: absolute; left: 5px; top: 5px; bottom: 5px; aspect-ratio: 1 / 1; border-radius: 50%; background: #E03C31;
-  display: flex; align-items: center; justify-content: center; cursor: grab; z-index: 1; }
-.go.sliding .gocirc { cursor: grabbing; }
-.go.snap .gocirc { transition: transform .25s ease; }
-.go.snap .gofill { transition: width .25s ease; }
-.go.snap .golbl { transition: opacity .25s ease; }
-.go.nudge .gocirc { animation: gonudge .7s ease; }
-@keyframes gonudge { 30% { transform: translateX(28px); } 60% { transform: translateX(0); } 80% { transform: translateX(10px); } 100% { transform: translateX(0); } }
+.go:active { transform: translateY(1px); }
+.golbl { flex: 1; text-align: center; white-space: nowrap; }
+.gocirc { flex: none; height: calc(var(--goh) - 10px); aspect-ratio: 1 / 1; border-radius: 50%; background: #E03C31;
+  display: flex; align-items: center; justify-content: center; }
 .presetbox { display: flex; flex-direction: column; gap: clamp(4px, 1vh, 12px); padding-top: clamp(6px, 1.4vh, 16px); border-top: 1px solid #d9d9d9; }
 .ptitle { font-size: clamp(10px, 1.4vh, 14px); font-weight: 700; letter-spacing: .08em; color: #5c5c5c; }
 .presets { display: flex; flex-wrap: wrap; justify-content: center; gap: clamp(5px, 0.9vh, 10px); }
@@ -163,16 +157,37 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   font-size: 10px; letter-spacing: .06em; color: #38bdf8; font-weight: 700; }
 .popnote { grid-column: 1 / -1; font-size: 12px; color: #d0d0d0; }
 
-.cbar { flex: none; min-height: 44px; display: grid; grid-template-columns: auto auto minmax(0, 1fr); align-items: center;
-  gap: 8px; padding: 0 10px; border-top: 1px solid rgba(255,255,255,.55); background: #000; }
-.cleft { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
-.cleft .small { color: #d0d0d0; white-space: nowrap; }
+/* Toolbar: groups in one row (they wrap on narrow screens), playback and speed on the right. */
+.cbar { flex: none; min-height: 44px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 0; padding: 4px 6px;
+  border-top: 1px solid rgba(255,255,255,.55); background: #000; }
+.tgroup { display: flex; align-items: center; gap: 6px; padding: 0 10px; min-width: 0; }
+.tgroup + .tgroup { border-left: 1px solid rgba(255,255,255,.2); }
+.tplay { margin-left: auto; gap: 2px; }
+.tplay .small { color: #d0d0d0; white-space: nowrap; min-width: 44px; margin-left: 6px; }
+.glbl { font-size: 10px; color: #999; letter-spacing: .06em; }
 .md { height: 28px; padding: 0 8px; background: transparent; color: #fff; border: 1px solid rgba(255,255,255,.4); cursor: pointer;
   font-family: 'DM Mono', monospace; font-size: 11px; }
 .md[aria-pressed="true"] { background: #fff; color: #000; }
+.ovstack { display: contents; }
+.gaialbl .sh { display: none; }   /* short forms of the overlay labels, for phones */
+
+/* Metadata panel (top left of the image): quality flags at the target in plain words; hover or
+   focus a flag for its description from the FITS header. */
+.meta { max-width: min(440px, calc(100% - 70px)); }
+.meta > svg { flex: none; align-self: flex-start; margin-top: 2px; }
+.metaflags { display: flex; flex-wrap: wrap; align-items: center; gap: 3px 4px; margin-top: 2px; font-size: 10px; color: #a8a8a8; pointer-events: auto; }
+.qf { padding: 0 5px; border: 1px solid rgba(255,90,60,.5); color: #ffb199; background: rgba(255,90,60,.14); cursor: help; white-space: nowrap; }
+.qf:focus-visible { outline: 2px solid #E03C31; }
+/* First-time guide: one line at the top, until dismissed. */
+.firsthint { position: fixed; top: 10px; left: 50%; transform: translateX(-50%); z-index: 20; display: flex; align-items: center; gap: 8px;
+  max-width: calc(100% - 420px); padding: 6px 6px 6px 12px; background: #0b0b0b; color: #fff; font-size: 12px; border-left: 3px solid #E03C31;
+  box-shadow: 0 2px 10px rgba(0,0,0,.55); }
+.firsthint b { color: #ffb199; font-weight: 700; }
+.firsthint button { flex: none; width: 24px; height: 24px; background: transparent; color: #fff; border: 0; cursor: pointer; }
+.firsthint button:focus-visible { outline: 2px solid #E03C31; }
+
 /* Segmented control: one choice of several (VIEW). Buttons share borders. */
 .seg { display: flex; align-items: center; flex: none; }
-.seglbl { font-size: 10px; color: #999; margin-right: 6px; }
 .seg .md + .md { border-left: 0; }
 .refsel { border: 1px solid rgba(255,255,255,.4); max-width: 150px; }
 /* DIFF legend: the diverging colours (blue – gray – yellow, as in DIVERGING in app.js) and the scale. */
@@ -199,14 +214,11 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .cvramp { display: inline-block; width: 28px; height: 6px; background: linear-gradient(90deg, rgba(56,189,248,.3), #38bdf8); }
 .cvhollow, .cvnow { display: inline-block; width: 7px; height: 7px; border-radius: 50%; border: 1.5px solid #38bdf8; }
 .cvnow { border-color: #E03C31; }
-.cmid { display: flex; align-items: center; gap: 2px; }
 .pb { border-radius: 50%; background: transparent; color: #fff; cursor: pointer; display: flex; align-items: center; justify-content: center; }
 .pb.plain { width: 38px; height: 38px; border: 0; }
 .pb.plain[aria-disabled="true"] { opacity: .35; }
 .pb.ring { width: 36px; height: 36px; border: 1.5px solid #fff; }
 .pb.ring.on { background: #E03C31; border-color: #E03C31; color: #fff; }
-.cright { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
-.cright label { font-size: 12px; white-space: nowrap; }
 .sel { appearance: none; -webkit-appearance: none; height: 28px; padding: 0 8px; background: #000; color: #fff; border: 0;
   font-size: 13px; cursor: pointer; }
 .pm { display: flex; border: 1px solid #fff; }
@@ -253,21 +265,38 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   .main .sky { flex: 1 1 auto; min-height: 0; }
   .viewwrap { flex: 1 1 auto; min-height: 0; }
   .viewwrap .sky { flex: 1 1 auto; min-height: 0; }
-  .cbar { grid-template-columns: 1fr; justify-items: center; padding: 6px 10px; }
-  .cleft, .cright { justify-content: center; flex-wrap: wrap; }
+  .cbar { justify-content: center; padding: 4px 2px; gap: 4px 0; }
+  .tgroup { padding: 0 6px; gap: 4px; }
+  .tgroup + .tgroup { border-left: 0; }
+  .tplay { margin-left: 0; }
+  .md { padding: 0 6px; font-size: 10px; height: 26px; }
+  .pb.plain { width: 32px; height: 32px; } .pb.ring { width: 32px; height: 32px; }
+  /* The guide takes its own line above the page (nothing is covered); the page gets the rest. */
+  body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+  .app { height: auto; flex: 1 1 auto; }
+  .firsthint { position: static; order: -1; transform: none; max-width: none; margin: 6px 8px 0; font-size: 11px; }
+  .meta { max-width: calc(100% - 66px); }
   .hintbar, .credit { font-size: 10px; max-width: calc(100% - 80px); }
   .extop { height: auto; align-items: flex-start; flex-direction: column; gap: 4px; }
   .pop { width: calc(100% - 20px); }
   /* The GAIA label moves under the date label, so it can't run into the credit at the bottom. */
-  .gaialbl { left: 8px; right: auto; top: 62px; bottom: auto; max-width: calc(100% - 64px); font-size: 10px; }
+  /* Bottom-left stack on phones: credit, then the GAIA/WISE label, then the BLINK/DIFF label. */
+  .ovstack { display: flex; flex-direction: column-reverse; align-items: flex-start; gap: 4px; position: absolute;
+    left: 8px; right: 8px; bottom: 8px; pointer-events: none; z-index: 2; }
+  .ovstack > .ov { position: static; transform: none; max-width: 100%; }
+  .sky.curve-open .ovstack { bottom: 136px; }
+  .gaialbl { font-size: 10px; }
+  .gaialbl .lg, .credit .lg { display: none; }
+  .gaialbl .sh { display: inline; }
+  .modelbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .metaflags > span:first-child:not(.qf) { display: none; }   /* phones: just the chip(s) */
   .label { max-width: calc(100% - 66px); }   /* clear of the zoom buttons on the right */
   .difflegend { width: 168px; font-size: 9px; padding: 4px 6px; }
   /* Light curve on phones: full width at the bottom; the credit and BLINK/DIFF label move above it. */
   .curve { left: 8px; right: 8px; bottom: 8px; width: auto; }
   .cvsvg { height: 78px; }
-  .sky.curve-open .credit { bottom: 132px; }
-  .sky.curve-open .modelbl { bottom: 184px; }
+
   /* BLINK / DIFF label: above the credit, so it doesn't cover the date label at the top. */
-  .modelbl { left: 8px; top: auto; bottom: 62px; transform: none; max-width: calc(100% - 16px); font-size: 10px; }
+  .modelbl { font-size: 10px; }
   .frameedge .rtag { display: none; }   /* no room for it beside the labels; page 1 shows the field size */
 }

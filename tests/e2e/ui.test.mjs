@@ -53,13 +53,7 @@ const litPixels = (p, sel) => p.$eval(sel, (c) => {
   for (let i = 0; i < d.length; i += 16) if (d[i] + d[i + 1] + d[i + 2] > 60) n++;
   return n;
 });
-async function dragSlider(p, frac) {
-  const k = await p.locator(".gocirc").boundingBox(), g = await p.locator("#goSlide").boundingBox();
-  const x0 = k.x + k.width / 2, y = k.y + k.height / 2, dist = (g.width - k.width - 10) * frac;
-  await p.mouse.move(x0, y); await p.mouse.down();
-  for (let i = 1; i <= 10; i++) await p.mouse.move(x0 + (dist * i) / 10, y);
-  await p.mouse.up(); await p.waitForTimeout(450);
-}
+const search = (p) => p.click("#goBtn");
 
 // ================================================================== page 1: pick
 async function page1() {
@@ -135,7 +129,7 @@ async function page1() {
     assert(/RA should be/.test(await p.textContent("#err")));
     await p.fill("#ra", "210.8"); await p.fill("#dec", "95"); await p.press("#dec", "Tab");
     assert(/Dec should be/.test(await p.textContent("#err")));
-    await p.fill("#dec", ""); await p.focus("#goSlide"); await p.keyboard.press("Enter");
+    await p.fill("#dec", ""); await p.click("#goBtn");
     assert(/Enter both/.test(await p.textContent("#err")) && await p.isVisible("#pick"));
     await p.fill("#dec", "+54.34895"); await p.press("#dec", "Tab");
   });
@@ -163,16 +157,13 @@ async function page1() {
     assert(/SPHEREx D5/.test(await p.textContent("#pvCredit")));
     await p.selectOption("#band", "SPHEREx-D3"); await previewReady(p);
   });
-  await check("P1 slide to search: a half slide springs back, a click only nudges", async () => {
-    await dragSlider(p, 0.5);
-    assert(await p.isVisible("#pick"), "half slide searched");
-    assert((await p.evaluate(() => getComputedStyle(goKnob).transform)).match(/none|matrix\(1, 0, 0, 1, 0, 0\)/));
-    await p.click("#goSlide"); await p.waitForTimeout(100);
-    assert(await p.evaluate(() => goBtn.classList.contains("nudge")) && await p.isVisible("#pick"));
+  await check("P1 Search is a normal labelled button", async () => {
+    assert((await p.textContent("#goBtn")).trim() === "SEARCH" && (await p.getAttribute("#goBtn", "type")) === "submit");
+    assert((await p.getAttribute("#goBtn", "title")).length > 10 && (await p.locator("#goSlide").count()) === 0);
   });
-  await check("P1 slide to search: a full slide opens page 2 for the typed position", async () => {
+  await check("P1 Search opens page 2 for the typed position", async () => {
     const typed = await p.evaluate(() => parseRA($("ra").value));
-    await dragSlider(p, 1);
+    await search(p);
     assert(await p.isVisible("#explore"));
     assert(near(await p.evaluate(() => ex.target.ra), typed, 1e-6));
   });
@@ -180,8 +171,8 @@ async function page1() {
   await close(p);
 
   for (const [label, act] of [
-    ["Enter on the slider", async (q) => { await q.focus("#goSlide"); await q.keyboard.press("Enter"); }],
-    ["Space on the slider", async (q) => { await q.focus("#goSlide"); await q.keyboard.press(" "); }],
+    ["Enter on the Search button", async (q) => { await q.focus("#goBtn"); await q.keyboard.press("Enter"); }],
+    ["Space on the Search button", async (q) => { await q.focus("#goBtn"); await q.keyboard.press(" "); }],
     ["Enter in the Dec field", async (q) => { await q.press("#dec", "Enter"); }],
   ]) {
     const q = await open(); await previewReady(q);
@@ -230,7 +221,7 @@ async function stacks() {
   });
   await check("STACK label shows the epoch's dates, wavelength range and frames stacked", async () => {
     assert(/^Survey 1 · \d{1,2} \w{3}( 20\d\d)? – \d{1,2} \w{3} 20\d\d$|^Survey 1 · \d{1,2} \w{3} 20\d\d$/.test(await p.textContent("#shownDate")), await p.textContent("#shownDate"));
-    assert(/^λ \d\.\d\d–\d\.\d\d µm · \d+ frames stacked · D3 · 6\.15″\/px$/.test(await p.textContent("#chanShort")), await p.textContent("#chanShort"));
+    assert(/^λ \d\.\d\d–\d\.\d\d µm · \d+ frames stacked · D3 · (DR1|QR3)$/.test(await p.textContent("#chanShort")), await p.textContent("#chanShort"));
     assert(/stack of \d+ images/.test(await p.textContent("#exCredit")));
   });
   await check("VIEW switching to Single frames loads every image", async () => {
@@ -356,7 +347,7 @@ async function stacks() {
     await wdown.waitForFunction(() => /WISE · unavailable/.test(document.getElementById("gaiaLabel").textContent), null, { timeout: 60000 });
     await exploreReady(wdown);
     const sky = await wdown.locator("#exSky").boundingBox(); await wdown.mouse.click(sky.x + sky.width / 3, sky.y + sky.height / 3);
-    assert(/WISE unavailable: WISE query at IRSA failed/.test(await wdown.textContent("#popRows")));
+    assert(/WISE unavailable: IRSA is busy or not answering right now/.test(await wdown.textContent("#popRows")), await wdown.textContent("#popRows"));
   });
   await close(wdown);
 
@@ -414,7 +405,7 @@ async function page2() {
   await check("P2 picture drawn; label shows date, wavelength and band; counter 1/N", async () => {
     assert((await litPixels(p, "#exSky canvas")) > 500);
     assert(/^\d{1,2} \w{3} 20\d\d · \d\d:\d\d UTC$/.test(await p.textContent("#shownDate")));
-    assert(/^λ [12]\.\d{3} µm · D3 · 6\.15″\/px$/.test(await p.textContent("#chanShort")));
+    assert(/^λ [12]\.\d{3} µm · D3 · (DR1|QR3) · 6\.15″\/px$/.test(await p.textContent("#chanShort")), await p.textContent("#chanShort"));
     assert(/^1\/\d+$/.test(await p.textContent("#frameNo")));
   });
   await check("P2 credit links to the original FITS file at IRSA", async () => {
@@ -428,7 +419,9 @@ async function page2() {
   });
   await check("P2 header has only Back; control bar has VIEW, counter, MODE and GAIA", async () => {
     assert((await p.locator(".extop").innerText()).trim() === "Back");
-    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,NORMAL,BLINK,DIFF,LOCK,GAIA,WISE,CURVE");
+    const groups = await p.$$eval(".cbar .tgroup", (gs) => gs.map((g) => [g.querySelector(".glbl") ? g.querySelector(".glbl").textContent : g.getAttribute("aria-label"),
+      [...g.querySelectorAll("button")].map((b) => b.textContent.trim() || b.getAttribute("aria-label")).join("/")].join(":")));
+    assert(groups.join(" | ") === "VIEW:STACKS/FRAMES/LOCK | MODE:NORMAL/BLINK/DIFF | SHOW:GAIA/WISE/CURVE | Playback:Previous image/Play/Pause/Next image | SPEED:+/−", groups.join(" | "));
     assert((await p.locator("#regionInfo, #flagChip, #diffBtn, #fsBtn, #exZoom [data-zoom=reset]").count()) === 0);
   });
   await check("P2 clicking a date shows that image", async () => {
@@ -530,7 +523,8 @@ async function page2() {
   await check("P2 GAIA: rings drawn, label counts stars, link remembers it", async () => {
     await p.click("#gaiaBtn");
     await p.waitForFunction(() => /stars/.test(document.getElementById("gaiaLabel").textContent), null, { timeout: 60000 });
-    assert(/^GAIA DR3 · G < 19 · \d+ stars · at .+ · arrows: 10-yr motion$/.test(await p.textContent("#gaiaLabel")));
+    assert(/^GAIA DR3 · G < 19 · \d+ stars · at .+ · arrows: 10-yr motion$/.test(await p.textContent("#gaiaLabel .ln-gaia .lg")), await p.textContent("#gaiaLabel"));
+    assert(/^GAIA · \d+ stars$/.test(await p.textContent("#gaiaLabel .ln-gaia .sh")));
     const blue = await p.$eval("#gaiaCanvas", (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0;
       for (let i = 0; i < d.length; i += 4) if (d[i + 2] > 200 && d[i] < 120 && d[i + 3] > 0) n++; return n; });
     assert(blue > 200, "no rings drawn");
@@ -603,6 +597,58 @@ async function page2() {
   await close(q);
 }
 
+// ================================================================== Task 6: toolbar, metadata, guide, shared links
+async function ux() {
+  const p = await open(BARNARD_STACKS);
+  await exploreReady(p);
+  await check("UX every toolbar control has a label, a tooltip and is reachable by keyboard", async () => {
+    const bad = await p.$$eval(".cbar button, .cbar select", (els) => els.filter((e) => !e.hidden).filter((e) =>
+      !(e.getAttribute("aria-label") || e.textContent.trim() || (e.id && document.querySelector(`label[for="${e.id}"]`))) ||
+      !(e.title || e.closest("[title]")) || e.tabIndex < 0).map((e) => e.id || e.textContent));
+    assert(!bad.length, "missing label/tooltip: " + bad.join());
+  });
+  await check("UX metadata panel: epoch dates, frames, wavelength range, release and plain-language flags with descriptions", async () => {
+    assert(/^Survey 1 · /.test(await p.textContent("#shownDate")));
+    assert(/^λ \d\.\d\d–\d\.\d\d µm · \d+ frames stacked · D3 · (DR1|QR3)/.test(await p.textContent("#chanShort")), await p.textContent("#chanShort"));
+    const flags = await p.textContent("#metaFlags");
+    if (/No quality flags/.test(flags)) return;
+    const chip = p.locator("#metaFlags .qf").first();
+    assert(!/[A-Z_]{4,}/.test(await chip.textContent()), "plain words, not FITS names: " + await chip.textContent());
+    assert(/^[A-Z_]+: /.test(await chip.getAttribute("title")) && (await chip.getAttribute("tabindex")) === "0");
+  });
+  await check("UX a shared link restores the exact state (view, item, mode, reference, overlays, lock, curve, zoom)", async () => {
+    await p.click('[data-view="frames"]'); await p.waitForFunction(() => ex.lists.frames.finished, null, { timeout: 400000 });
+    await p.locator(".fr").nth(6).click();
+    await p.click('[data-mode="diff"]'); await p.selectOption("#refSel", "2");
+    await p.click("#gaiaBtn"); await p.click("#wiseBtn"); await p.click("#lockBtn");
+    if ((await p.getAttribute("#curveBtn", "aria-pressed")) !== "true") await p.click("#curveBtn");
+    await p.click('#exZoom [data-zoom="in"]'); await p.click('#exZoom [data-zoom="in"]');
+    await p.waitForTimeout(500);
+    const url = p.url(), state = () => ({ view: ex.view, i: ex.current, mode: ex.mode, ref: ex.ref, gaia: gaia.on, wise: wise.on,
+      lock: ex.lock[ex.view], curve: ex.curve, z: +exView.z.toFixed(2), size: ex.h, band: ex.band });
+    const before = await p.evaluate(state);
+    assert(/view=frames/.test(url) && /i=6/.test(url) && /mode=diff/.test(url) && /ref=2/.test(url) && /z=2\.25/.test(url) && /at=/.test(url), url);
+    const q = await open(url.slice(url.indexOf("#")));
+    await exploreReady(q); await q.waitForTimeout(500);
+    const after = await q.evaluate(state);
+    assert(JSON.stringify(after) === JSON.stringify(before), JSON.stringify(before) + " vs " + JSON.stringify(after));
+    const centre = (x) => x.evaluate(() => { const r = exView.rect(), c = exView.toImage(r.width / 2, r.height / 2); return [c.ix, c.iy]; });
+    const [a, b] = [await centre(p), await centre(q)];
+    assert(Math.abs(a[0] - b[0]) < 0.6 && Math.abs(a[1] - b[1]) < 0.6, `view centre ${a} vs ${b}`);
+    await close(q);
+  });
+  await close(p);
+
+  const h = await open();
+  await check("UX first-time guide: shown once, dismissible, stays dismissed", async () => {
+    assert(await h.isVisible("#firstHint") && /Pick a target → Search → press Play or Diff/.test(await h.textContent("#firstHint")));
+    await h.click("#firstHintClose"); assert(await h.isHidden("#firstHint"));
+    await h.reload(); await h.waitForTimeout(300);
+    assert(await h.isHidden("#firstHint"), "came back after a reload");
+  });
+  await close(h);
+}
+
 // ================================================================== failures (simulated)
 async function failures() {
 
@@ -610,6 +656,7 @@ async function failures() {
   await check("FAIL IRSA search down: page 2 explains and offers Back", async () => {
     await p.waitForSelector("#noObs:not([hidden])", { timeout: 20000 });
     assert(/Could not search IRSA/.test(await p.textContent("#noObsTitle")));
+    assert(/busy or not answering right now\. Please try again/.test(await p.textContent("#noObsText")), await p.textContent("#noObsText"));
   });
   await close(p);
 
@@ -654,7 +701,7 @@ async function failures() {
   await check("FAIL Gaia unavailable: the label and the pop-up say so", async () => {
     await p.waitForFunction(() => /unavailable/.test(document.getElementById("gaiaLabel").textContent), null, { timeout: 20000 });
     const sky = await p.locator("#exSky").boundingBox(); await p.mouse.click(sky.x + sky.width / 2, sky.y + sky.height / 2);
-    assert(/Gaia unavailable/.test(await p.textContent("#popRows")));
+    assert(/Gaia unavailable: MAST is busy or not answering/.test(await p.textContent("#popRows")));
   });
   await close(p);
 }
@@ -673,9 +720,41 @@ async function layout() {
     await check(`LAYOUT ${name}: page 1 fits (no page or sidebar scrolling)`, async () => {
       const m = await overflow(p); assert(m.v <= 0 && m.h <= 0 && m.side <= 1, JSON.stringify(m));
     });
-    await check(`LAYOUT ${name}: slide to search works`, async () => { await dragSlider(p, 1); assert(await p.isVisible("#explore")); });
+    await check(`LAYOUT ${name}: page 1 guide doesn't cover the form, presets or zoom buttons`, async () => {
+      assert(await p.isVisible("#firstHint"));
+      const hits = await p.evaluate(() => {
+        const g = document.getElementById("firstHint").getBoundingClientRect();
+        return [...document.querySelectorAll("#pick button, #pick input, #pick select, #pick .lblt")].filter((e) => {
+          const r = e.getBoundingClientRect();
+          return r.width && g.left < r.right && r.left < g.right && g.top < r.bottom && r.top < g.bottom;
+        }).map((e) => e.id || e.className || e.textContent);
+      });
+      assert(!hits.length, hits.join());
+    });
+    await check(`LAYOUT ${name}: Search works`, async () => { await search(p); assert(await p.isVisible("#explore")); });
     await exploreReady(p);
     await check(`LAYOUT ${name}: page 2 fits (no page scrolling)`, async () => {
+      const m = await overflow(p); assert(m.v <= 0 && m.h <= 0, JSON.stringify(m));
+    });
+    await check(`LAYOUT ${name}: with every layer on, no labels, panels or controls overlap`, async () => {
+      for (const sel of ["#gaiaBtn", "#wiseBtn", '[data-mode="diff"]']) await p.click(sel);
+      if ((await p.getAttribute("#curveBtn", "aria-pressed")) !== "true") await p.click("#curveBtn");
+      await p.locator(".fr").last().click();
+      await p.waitForFunction(() => wise.data || wise.error, null, { timeout: 120000 });
+      await p.waitForTimeout(300);
+      const hits = await p.evaluate(() => {
+        const sels = ["#meta", "#modeLabel", "#gaiaLabel", "#exCredit", "#curve", "#diffLegend", "#exZoom", ".cbar", "#strip", "#firstHint", "#back"];
+        // (getClientRects: also counts the fixed-position guide, which has no offsetParent)
+        const boxes = sels.map((s) => [s, document.querySelector(s)]).filter(([, e]) => e && !e.hidden && e.getClientRects().length && getComputedStyle(e).display !== "none")
+          .map(([s, e]) => [s, e.getBoundingClientRect()]);
+        const out = [];
+        for (let i = 0; i < boxes.length; i++) for (let j = i + 1; j < boxes.length; j++) {
+          const [a, A] = boxes[i], [b, B] = boxes[j];
+          if (A.left < B.right - 1 && B.left < A.right - 1 && A.top < B.bottom - 1 && B.top < A.bottom - 1) out.push(`${a} × ${b}`);
+        }
+        return out;
+      });
+      assert(!hits.length, hits.join(", "));
       const m = await overflow(p); assert(m.v <= 0 && m.h <= 0, JSON.stringify(m));
     });
     await close(p);
@@ -685,7 +764,7 @@ async function layout() {
 // ================================================================== run
 browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const t0 = Date.now();
-for (const part of [page1, page2, stacks, failures, layout]) {
+for (const part of [page1, page2, stacks, ux, failures, layout]) {
   try { await part(); } catch (e) { results.push([false, `${part.name} crashed: ${e.message}`]); console.log("FAIL", part.name, "crashed:", e.message); }
 }
 await browser.close();
