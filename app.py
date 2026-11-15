@@ -18,6 +18,8 @@ Endpoints
   GET  /api/cutout       one frame: zodi-subtracted, resampled north-up (JSON)
   POST /api/cutouts      many frames, streamed back one JSON line each as they finish
   GET  /api/gaia         Gaia DR3 stars around a position
+  GET  /api/collections  the SPHEREx releases searched (ANVIS_COLLECTIONS) and, at a position,
+                         every SPHEREx collection IRSA has there
 
 Caches (all in memory unless noted)
   * IRSA searches (sia_rows) and Gaia cones (gaia_cone): functools.lru_cache.
@@ -35,7 +37,7 @@ import re
 import threading
 import time
 import warnings
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from functools import lru_cache
 
 import numpy as np
@@ -52,7 +54,24 @@ logging.getLogger("astropy").setLevel(logging.ERROR)
 IRSA = "https://irsa.ipac.caltech.edu"
 SIA_URL = IRSA + "/SIA"
 DATA_PREFIX = IRSA + "/ibe/data/spherex/"
-COLLECTIONS = ["spherex_dr1", "spherex_qr3"]  # DR1 + QR3 (QR2 is superseded)
+DEFAULT_COLLECTIONS = "spherex_dr1,spherex_qr3"   # DR1 + QR3 (QR2 is superseded)
+
+
+def collections_from_env(value):
+    """The IRSA collections to search, from ANVIS_COLLECTIONS ("a,b,c").
+
+    New SPHEREx releases appear on IRSA as new collections (for example spherex_qr4), so they are
+    configured rather than written into the code. Names are checked because they go into the
+    IRSA query; a bad value stops the server with a clear message instead of failing later.
+    """
+    names = [c.strip() for c in value.split(",") if c.strip()]
+    bad = [c for c in names if not re.fullmatch(r"[a-z0-9_]+", c)]
+    if not names or bad:
+        raise ValueError(f"ANVIS_COLLECTIONS must be comma-separated IRSA collection names, got {value!r}")
+    return names
+
+
+COLLECTIONS = collections_from_env(os.environ.get("ANVIS_COLLECTIONS", DEFAULT_COLLECTIONS))
 BANDS = [f"SPHEREx-D{i}" for i in range(1, 7)]
 PIXEL_SCALE = 6.15 / 3600.0  # deg/pixel, native SPHEREx scale
 MAX_SIZE_ARCSEC = 1800    # field height (and width, for square fields)
@@ -142,6 +161,47 @@ def frames():
         })
     out.sort(key=lambda f: f["mjd"])
     return jsonify({"ra": ra, "dec": dec, "band": band, "frames": out})
+
+
+def release_label(collection):
+    """Short name of a collection for the page: spherex_dr1 -> "DR1", spherex_qr3_deep -> "QR3 Deep"."""
+    parts = collection.removeprefix("spherex_").split("_")
+    return " ".join([parts[0].upper()] + [p.capitalize() for p in parts[1:]])
+
+
+@lru_cache(maxsize=256)
+def spherex_collections_at(ra, dec):
+    """{collection: image count} for every SPHEREx collection IRSA has at (ra, dec). Cached.
+
+    IRSA has no quick way to list all collections (a TAP query for that took over 90 s), but an
+    SIA search without a collection filter at one position is fast and shows what exists there.
+    """
+    params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "50000")]
+    text = remote_get(SIA_URL, params=params, timeout=120).text
+    counts = Counter(row.get("obs_collection") or "" for row in csv.DictReader(io.StringIO(text)))
+    return {c: n for c, n in sorted(counts.items()) if c.startswith("spherex")}
+
+
+@app.get("/api/collections")
+def collections():
+    """The SPHEREx collections this server searches; with ?ra&dec also those IRSA has there.
+
+    {"in_use": [{"collection", "label"}], "available": [{"collection", "label", "images", "in_use"}]}
+    ("available" only when a position is given).
+    """
+    out = {"in_use": [{"collection": c, "label": release_label(c)} for c in COLLECTIONS]}
+    if "ra" in request.args or "dec" in request.args:
+        try:
+            ra, dec = parse_position()
+        except ValueError as e:
+            return bad(str(e))
+        try:
+            found = spherex_collections_at(round(ra, 5), round(dec, 5))
+        except Exception as e:
+            return bad(f"IRSA SIA query failed: {e}", 502)
+        out["available"] = [{"collection": c, "label": release_label(c), "images": n, "in_use": c in COLLECTIONS}
+                            for c, n in found.items()]
+    return jsonify(out)
 
 
 # ----------------------------------------------------------------------------- talking to IRSA / MAST
@@ -508,8 +568,9 @@ def gaia():
         gmax = float(request.args.get("gmax", 19))
     except ValueError as e:
         return bad(str(e))
-    if not 0.001 <= radius <= 0.3:
-        return bad("radius must be between 0.001 and 0.3 degrees")
+    # Up to 0.4°: a 30′ × 30′ field reaches 21′ from its centre at the corners.
+    if not 0.001 <= radius <= 0.4:
+        return bad("radius must be between 0.001 and 0.4 degrees")
     if not 5 <= gmax <= 21:
         return bad("gmax must be between 5 and 21")
     try:

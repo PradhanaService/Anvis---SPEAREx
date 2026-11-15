@@ -7,7 +7,7 @@ a { color: #0b0b0b; } a:hover { color: #E03C31; }
 .small { font-size: 11px; }
 [hidden] { display: none !important; }
 button, input, select { font: inherit; }
-.tb:focus-visible, .fld:focus-visible, .pr:focus-visible, .go:focus-visible, .zb:focus-visible,
+.tb:focus-visible, .fld:focus-visible, .range:focus-visible, .pr:focus-visible, .go:focus-visible, .zb:focus-visible,
 .pb:focus-visible, .md:focus-visible, .sb:focus-visible, .fr:focus-visible, .cx:focus-visible, .bk:focus-visible,
 .sel:focus-visible, a:focus-visible { outline: 2px solid #E03C31; outline-offset: 2px; }
 
@@ -34,6 +34,8 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .fld option { background: #fff; color: #0b0b0b; }
 .fld:focus { border-color: #E03C31; }
 .hint { font-family: 'DM Mono', monospace; font-size: clamp(10px, 1.45vh, 14px); color: #5c5c5c; }
+/* Field-height slider: the browser's own range input, tinted with the accent red. */
+.range { width: 100%; height: clamp(22px, 3vh, 30px); margin: 0; accent-color: #E03C31; cursor: pointer; }
 .err { margin: 0; font-size: 12px; font-weight: 500; color: #B42A13; }
 /* Slide to search: drag the red handle from left to right across the pill. */
 .go { --goh: clamp(38px, 7.2vh, 64px); position: relative; display: flex; align-items: center; justify-content: center; height: var(--goh);
@@ -196,17 +198,34 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   .hint { display: none; }
 }
 
+/* Phones: both pages fit the screen (100dvh, no page scroll). Page 1 puts a compact form above
+   the preview, which takes the remaining height; only the preset row scrolls (sideways). */
 @media (max-width: 760px) {
-  .app { height: auto; min-height: 100vh; overflow: visible; }
+  .app { padding: 8px; gap: 8px; min-height: 0; }
   .app.pick { flex-direction: column; }
-  .side { flex: none; overflow: visible; }
-  .presetbox { margin-top: 0; }
-  .main .sky { flex: none; height: 62vh; }
-  .viewwrap { flex: none; }
-  .viewwrap .sky { flex: none; height: 56vh; }
+  .side { flex: none; overflow: visible; padding: 8px 10px; gap: 6px; }
+  .brand { padding-bottom: 4px; }
+  .sform { flex: none; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px 8px; }
+  .sform .fgroup-size, .sform .err, .sform .go { grid-column: 1 / -1; }
+  .fgroup label { font-size: 11px; }
+  .fld { height: 32px; font-size: 13px; }
+  select.fld { font-size: 12px; }
+  .hint { font-size: 10px; }
+  .range { height: 22px; }
+  .go { --goh: 40px; font-size: 13px; }
+  .presetbox { gap: 4px; padding-top: 6px; }
+  .presets { flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding-bottom: 2px; }
+  .pr { flex: 0 0 auto; min-height: 32px; padding: 4px 10px; font-size: 11px; white-space: nowrap; }
+  .main { flex: 1 1 auto; min-height: 0; }
+  .main .sky { flex: 1 1 auto; min-height: 0; }
+  .viewwrap { flex: 1 1 auto; min-height: 0; }
+  .viewwrap .sky { flex: 1 1 auto; min-height: 0; }
   .cbar { grid-template-columns: 1fr; justify-items: center; padding: 6px 10px; }
   .cleft, .cright { justify-content: center; flex-wrap: wrap; }
   .hintbar, .credit { font-size: 10px; max-width: calc(100% - 80px); }
   .extop { height: auto; align-items: flex-start; flex-direction: column; gap: 4px; }
   .pop { width: calc(100% - 20px); }
+  /* The GAIA label moves under the date label, so it can't run into the credit at the bottom. */
+  .gaialbl { left: 8px; right: auto; top: 62px; bottom: auto; max-width: calc(100% - 64px); font-size: 10px; }
+  .frameedge .rtag { display: none; }   /* no room for it beside the labels; page 1 shows the field size */
 }

@@ -31,10 +31,14 @@
         <input id="dec" class="fld dec" type="text" inputmode="decimal" autocomplete="off" spellcheck="false" placeholder="deg or ±dd mm ss">
         <span class="hint" id="decHint">Degrees, or ±dd mm ss</span>
       </div>
-      <div class="fgroup">
-        <label for="size">HEIGHT <span class="lite">(ARCMIN)</span></label>
-        <input id="size" class="fld" type="number" min="1" max="10" step="1" value="4">
-        <span class="hint" id="sizeHint">1–10 arcmin</span>
+      <div class="fgroup fgroup-size">
+        <label for="size">FIELD HEIGHT <span class="lite mono" id="sizeVal">4′</span></label>
+        <input id="size" class="range" type="range" min="1" max="30" step="1" value="4" list="sizeTicks"
+          aria-label="Field height in arcminutes, 1 to 30" aria-describedby="sizeHint sizeEst"
+          title="How much sky to show, from 1′ to 30′ tall (the width follows your screen). A bigger field shows more around the target and helps track fast movers, but downloads more data and loads more slowly.">
+        <datalist id="sizeTicks"><option value="2"></option><option value="5"></option><option value="10"></option><option value="20"></option><option value="30"></option></datalist>
+        <span class="hint" id="sizeHint">Field 4′</span>
+        <span class="hint" id="sizeEst" aria-live="polite"></span>
       </div>
       <div class="fgroup">
         <label for="band">BAND <span class="lite">(DETECTOR)</span></label>
@@ -76,7 +80,7 @@
         <svg width="28" height="28" viewBox="0 0 46 46" fill="none" stroke="#ffffff" stroke-width="1.6" role="img" aria-label="Orientation: North up, East left"><path d="M34 34V10"></path><path d="M30 14l4-4 4 4"></path><path d="M34 34H10"></path><path d="M14 30l-4 4 4 4"></path><text x="30" y="8" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">N</text><text x="1" y="31" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">E</text></svg>
         <span class="lblt"><b id="pvName">Custom field</b><span class="mono" id="pvSubl"></span></span>
       </div>
-      <div class="ov hintbar">Drag to pan · scroll to zoom · click to pick · <span id="pvCredit">SPHEREx image from IRSA</span></div>
+      <div class="ov hintbar">Drag to pan · scroll to zoom · click to pick · <span id="pvCredit">SPHEREx image from IRSA</span><span id="pvReleases"></span></div>
       <div class="region" hidden><div class="rtag"></div></div>
       <div class="cross-h" hidden></div><div class="cross-v" hidden></div>
       <div class="hovertag" hidden></div>

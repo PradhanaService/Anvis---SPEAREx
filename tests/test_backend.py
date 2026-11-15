@@ -68,7 +68,7 @@ def test_cutouts_rejects_bad_bodies(client, body):
     assert r.status_code == 400
 
 
-@pytest.mark.parametrize("query", ["ra=10&dec=10&radius=1", "ra=10&dec=10&radius=0.1&gmax=30", "dec=10"])
+@pytest.mark.parametrize("query", ["ra=10&dec=10&radius=0.5", "ra=10&dec=10&radius=0.1&gmax=30", "dec=10"])
 def test_gaia_rejects_bad_requests(client, query):
     assert client.get("/api/gaia?" + query).status_code == 400
 
@@ -274,3 +274,29 @@ def test_gaia_keeps_big_ids_exact_and_handles_missing_values(client, monkeypatch
     assert d["stars"][0][0] == str(big) and d["stars"][0][4] == pytest.approx(10362.39)
     assert d["stars"][1][3] is None and d["stars"][1][8] is None     # missing proper motion / colour
     assert d["epoch"] == 2016.0 and d["truncated"] is False
+
+
+# ----------------------------------------------------------------------------- data releases
+def test_collections_from_env_parses_and_validates():
+    assert app.collections_from_env("spherex_dr1, spherex_qr3 ,spherex_qr4") == ["spherex_dr1", "spherex_qr3", "spherex_qr4"]
+    for bad in ("", " , ", "spherex_dr1,Bad-Name", "x'; DROP"):
+        with pytest.raises(ValueError):
+            app.collections_from_env(bad)
+    assert app.COLLECTIONS == app.collections_from_env(os.environ.get("ANVIS_COLLECTIONS", app.DEFAULT_COLLECTIONS))
+
+
+def test_release_labels():
+    assert [app.release_label(c) for c in ("spherex_dr1", "spherex_qr3", "spherex_qr3_deep")] == ["DR1", "QR3", "QR3 Deep"]
+
+
+def test_collections_endpoint(client, monkeypatch):
+    d = client.get("/api/collections").get_json()
+    assert [c["collection"] for c in d["in_use"]] == app.COLLECTIONS and "available" not in d
+    csv_text = "obs_collection,x\nspherex_dr1,1\nspherex_dr1,2\nspherex_qr3_deep,3\nspitzer_sha,4\n"
+    monkeypatch.setattr(app, "remote_get", lambda *a, **k: FakeResponse(200, text=csv_text))
+    app.spherex_collections_at.cache_clear()
+    d = client.get("/api/collections?ra=10&dec=10").get_json()
+    assert d["available"] == [
+        {"collection": "spherex_dr1", "label": "DR1", "images": 2, "in_use": "spherex_dr1" in app.COLLECTIONS},
+        {"collection": "spherex_qr3_deep", "label": "QR3 Deep", "images": 1, "in_use": False}]
+    assert client.get("/api/collections?ra=400&dec=10").status_code == 400

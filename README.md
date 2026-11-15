@@ -22,7 +22,8 @@ HTML/CSS/JS in `static/`.
 
 The app has two pages:
 
-1. **Pick** – a sidebar (RA, Dec, height in arcmin, band D1–D6, **Slide to Search**, five presets)
+1. **Pick** – a sidebar (RA, Dec, a field-height slider from 1′ to 30′ with a download estimate
+   such as "~59 frames · ~11 MB", band D1–D6, **Slide to Search**, five presets)
    next to a real SPHEREx image you can pan, zoom and hover to read coordinates; click to pick a
    position. A dashed box shows the field the search will fetch. Drag the red handle of
    *Slide to Search* to the right end to search (Enter also works). Presets fill the target, set
@@ -56,6 +57,39 @@ python app.py
 ```
 
 Then open http://localhost:8000/#ra=210.80227&dec=54.34895 (M101).
+
+## Adding a new SPHEREx data release
+
+SPHEREx releases appear on IRSA as new collections (e.g. `spherex_qr4`). The app searches the
+collections listed in the `ANVIS_COLLECTIONS` environment variable (comma-separated; default
+`spherex_dr1,spherex_qr3`), so a new release needs no code change:
+
+1. See which SPHEREx collections IRSA has at a position (any well-observed field will do):
+
+   ```bash
+   curl "http://localhost:8000/api/collections?ra=270&dec=66.56"
+   ```
+
+   Each entry shows the collection, a short label, how many images it has there, and whether the
+   app already uses it. (IRSA has no quick way to list every collection, so this asks about one
+   position; at a deep field it can take ~30 s.)
+2. Add the new collection and restart the app, for example (macOS/Linux):
+
+   ```bash
+   ANVIS_COLLECTIONS=spherex_dr1,spherex_qr3,spherex_qr4 python app.py
+   ```
+
+   On Windows PowerShell: `$env:ANVIS_COLLECTIONS="spherex_dr1,spherex_qr3,spherex_qr4"`, then
+   `python app.py`. On a host such as Render, set it as an environment variable.
+3. The page credit on page 1 shows the releases in use (e.g. "Releases DR1 + QR3 + QR4").
+
+Notes:
+* Only lower-case letters, digits and `_` are accepted; anything else stops the server with a
+  clear message.
+* Remove a release when a newer one supersedes it (as DR1 and QR3 superseded QR2), so the same
+  observation isn't shown twice.
+* The Deep Survey collections (`spherex_dr1_deep`, `spherex_qr3_deep`) hold many more images
+  (tens of thousands near the ecliptic poles); add them deliberately.
 
 ## Project layout
 

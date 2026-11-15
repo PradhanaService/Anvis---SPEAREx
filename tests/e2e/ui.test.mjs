@@ -134,13 +134,25 @@ async function page1() {
     assert(/Dec should be/.test(await p.textContent("#err")));
     await p.fill("#dec", ""); await p.focus("#goSlide"); await p.keyboard.press("Enter");
     assert(/Enter both/.test(await p.textContent("#err")) && await p.isVisible("#pick"));
-    await p.fill("#dec", "+54.34895"); await p.fill("#size", "11"); await p.dispatchEvent("#size", "input");
-    await p.focus("#goSlide"); await p.keyboard.press("Enter");
-    assert(/Height should be 1–10/.test(await p.textContent("#err")) && await p.isVisible("#pick"));
-    await p.fill("#size", "4"); await p.dispatchEvent("#size", "input");
+    await p.fill("#dec", "+54.34895"); await p.press("#dec", "Tab");
   });
-  await check("P1 height hint shows the field size", async () => {
-    assert(/^Field 4′ × [\d.]+′$/.test(await p.textContent("#sizeHint")));
+  await check("P1 field-height slider: labelled, 1′–30′ by keyboard, field size and download estimate", async () => {
+    assert((await p.getAttribute("#size", "aria-label")).includes("1 to 30") && (await p.getAttribute("#size", "title")).length > 40);
+    assert(/^Field 4′ × [\d.]+′$/.test(await p.textContent("#sizeHint")) && (await p.textContent("#sizeVal")) === "4′");
+    await p.focus("#size"); await p.keyboard.press("End");
+    assert((await p.inputValue("#size")) === "30" && (await p.textContent("#sizeVal")) === "30′");
+    assert((await p.textContent("#sizeHint")) === "Field 30′ × 30′", "width must stop at the backend's 1800″");
+    await p.waitForFunction(() => /MB/.test(document.getElementById("sizeEst").textContent), null, { timeout: 60000 });
+    assert(/^~\d+( of \d+)? frames · ~[\d.]+ MB · larger = slower$/.test(await p.textContent("#sizeEst")), await p.textContent("#sizeEst"));
+    const big = parseFloat((await p.textContent("#sizeEst")).split("~")[2]);
+    await p.keyboard.press("Home"); assert((await p.inputValue("#size")) === "1");
+    await p.waitForFunction((b) => /MB/.test(document.getElementById("sizeEst").textContent) && parseFloat(document.getElementById("sizeEst").textContent.split("~")[2]) < b, big, { timeout: 60000 });
+    for (let i = 0; i < 3; i++) await p.keyboard.press("ArrowRight");
+    assert((await p.inputValue("#size")) === "4");
+  });
+  await check("P1 credit names the data releases in use", async () => {
+    await p.waitForFunction(() => /Releases/.test(document.getElementById("pvReleases").textContent), null, { timeout: 20000 });
+    assert(/^ · Releases DR1 \+ QR3$/.test(await p.textContent("#pvReleases")), await p.textContent("#pvReleases"));
   });
   await check("P1 changing the band reloads the preview in that band", async () => {
     await p.selectOption("#band", "SPHEREx-D5"); await previewReady(p);
@@ -341,6 +353,15 @@ async function page2() {
   if (p.errors.length) await check("P2 no script errors", async () => assert(false, p.errors.join(" | ")));
   await close(p);
 
+  const big = await open("#ra=269.446259&dec=4.768324&size=1800&band=SPHEREx-D3");
+  await check("URL: size=1800 restores a 30′ field and loads it", async () => {
+    await exploreReady(big);
+    const s = await big.evaluate(() => ({ h: ex.h, w: ex.w, nx: exView.field.nx, ny: exView.field.ny, slider: $("size").value, loaded: ex.frames.filter((f) => f.cut).length }));
+    assert(s.h === 1800 && s.w === 1800 && s.nx === 293 && s.ny === 293 && s.slider === "30" && s.loaded > 10, JSON.stringify(s));
+    assert(/size=1800/.test(big.url()));
+  });
+  await close(big);
+
   const q = await open("#ra=269.446259&dec=4.768324&size=240&band=SPHEREx-D5&speed=250&gaia=1");
   await check("URL: band, size, old millisecond speed and gaia=1 are restored", async () => {
     await q.waitForFunction(() => ex.frames.length, null, { timeout: 120000 });
@@ -408,27 +429,26 @@ async function failures() {
 }
 
 // ================================================================== layout
+// Both pages must fit the screen with no page scrolling at the four required sizes (only the
+// date strip, the preset row on phones and the pop-up may scroll inside themselves).
 async function layout() {
-  for (const [w, h] of [[1920, 1080], [1366, 657], [1024, 500]]) {
-    const p = await open("", { viewport: { width: w, height: h } });
-    await check(`LAYOUT ${w}×${h}: the sidebar fills the height with no scrolling`, async () => {
-      const m = await p.evaluate(() => { const s = document.querySelector(".side"), r = s.getBoundingClientRect(), last = document.querySelector(".presetbox").getBoundingClientRect();
-        return { scroll: s.scrollHeight > s.clientHeight + 1, toBottom: innerHeight - 10 - r.bottom, below: r.bottom - last.bottom }; });
-      assert(!m.scroll && near(m.toBottom, 0, 1) && m.below < 25, JSON.stringify(m));
+  const sizes = [["1366×768", { viewport: { width: 1366, height: 768 } }], ["1440×900", { viewport: { width: 1440, height: 900 } }],
+                 ["1920×1080", { viewport: { width: 1920, height: 1080 } }], ["390×844 phone", { ...devices["iPhone 13"], viewport: { width: 390, height: 844 } }]];
+  const overflow = (p) => p.evaluate(() => ({ v: document.documentElement.scrollHeight - innerHeight, h: document.documentElement.scrollWidth - innerWidth,
+    side: document.querySelector(".side").scrollHeight - document.querySelector(".side").clientHeight }));
+  for (const [name, opts] of sizes) {
+    const p = await open("", opts);
+    await previewReady(p);
+    await check(`LAYOUT ${name}: page 1 fits (no page or sidebar scrolling)`, async () => {
+      const m = await overflow(p); assert(m.v <= 0 && m.h <= 0 && m.side <= 1, JSON.stringify(m));
+    });
+    await check(`LAYOUT ${name}: slide to search works`, async () => { await dragSlider(p, 1); assert(await p.isVisible("#explore")); });
+    await exploreReady(p);
+    await check(`LAYOUT ${name}: page 2 fits (no page scrolling)`, async () => {
+      const m = await overflow(p); assert(m.v <= 0 && m.h <= 0, JSON.stringify(m));
     });
     await close(p);
   }
-  const p = await open("", { ...devices["iPhone 13"] });
-  await previewReady(p);
-  await check("LAYOUT phone: no sideways scrolling on page 1; slide to search works by touch-size drag", async () => {
-    assert((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0);
-    await dragSlider(p, 1); assert(await p.isVisible("#explore"));
-  });
-  await exploreReady(p);
-  await check("LAYOUT phone: no sideways scrolling on page 2", async () => {
-    assert((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0);
-  });
-  await close(p);
 }
 
 // ================================================================== run

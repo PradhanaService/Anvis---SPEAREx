@@ -322,16 +322,19 @@ const bandShort = (b) => b.slice(-2);
 const sameSky = (a, b) => a && b && Math.abs(a.ra - b.ra) < 1e-5 && Math.abs(a.dec - b.dec) < 1e-5;
 const presetAt = (c) => PRESETS.find((p) => sameSky(p, c));
 
-// Field height (arcsec) from the HEIGHT box (arcmin, 1–10).
+// Field height (arcsec) from the FIELD HEIGHT slider (arcmin, 1–30; the backend allows up to 1800″).
+const MAX_HEIGHT_ARCMIN = 30;
 function heightArcsec() {
   const m = Number($("size").value);
-  return m >= 1 && m <= 10 ? Math.round(m * 60) : null;
+  return m >= 1 && m <= MAX_HEIGHT_ARCMIN ? Math.round(m * 60) : null;
 }
 // Explore field width: the explore viewer's shape (pixels stay square), within backend limits.
 function exploreWidth(h) {
+  // Approximate size of the explore image area (page 2 is hidden while page 1 asks): the window
+  // minus the header, control bar and date strip (taller on phones, where the bar wraps).
   const narrow = window.innerWidth <= 760;
-  const vw = Math.max(200, window.innerWidth - 22);
-  const vh = narrow ? window.innerHeight * 0.56 : Math.max(160, Math.max(window.innerHeight, 480) - 172);
+  const vw = Math.max(200, window.innerWidth - (narrow ? 18 : 22));
+  const vh = Math.max(160, narrow ? window.innerHeight - 300 : Math.max(window.innerHeight, 480) - 172);
   return Math.round(Math.min(MAX_WIDTH, Math.max(h, h * vw / vh)));
 }
 
@@ -432,7 +435,7 @@ function setPick(c, fillInputs) {
     $("ra").value = c.ra.toFixed(5); $("dec").value = (c.dec >= 0 ? "+" : "") + c.dec.toFixed(5);
     $("err").hidden = true;
   }
-  updateHints(); updatePickLabel(); placePickMarks();
+  updateHints(); updatePickLabel(); placePickMarks(); updateEstimate();
 }
 
 function updateHints() {
@@ -465,7 +468,7 @@ function onTyped() {
 function runSearch() {      // returns true when the search starts
   const c = typedPosition(true);
   if (!c) return false;
-  if (!heightArcsec()) { $("err").hidden = false; $("err").textContent = "Height should be 1–10 arcmin."; return false; }
+  if (!heightArcsec()) { $("err").hidden = false; $("err").textContent = `Field height should be 1–${MAX_HEIGHT_ARCMIN} arcmin.`; return false; }
   pk.pick = c;
   writeHash(c);
   openExplore(c);
@@ -521,12 +524,51 @@ $("ra").addEventListener("input", updateHints);
 $("dec").addEventListener("input", updateHints);
 $("ra").addEventListener("change", onTyped);
 $("dec").addEventListener("change", onTyped);
-$("band").addEventListener("change", () => loadPreview(pk.center));
+$("band").addEventListener("change", () => { loadPreview(pk.center); updateEstimate(); });
 $("size").addEventListener("input", () => {
   const h = heightArcsec();
-  $("sizeHint").textContent = h ? `Field ${fmtArc(h)} × ${fmtArc(exploreWidth(h))}` : "1–10 arcmin";
-  placePickMarks();
+  $("sizeVal").textContent = h ? fmtArc(h) : "";
+  $("sizeHint").textContent = h ? `Field ${fmtArc(h)} × ${fmtArc(exploreWidth(h))}` : `1–${MAX_HEIGHT_ARCMIN} arcmin`;
+  placePickMarks(); updateEstimate();
 });
+
+// ---- download estimate under the slider: "~59 frames · ~14 MB · larger = slower"
+// Frame count: the (cached) IRSA search for the typed position and band. Size: what the server
+// downloads from IRSA per frame – a square cutout covering the field's diagonal at any detector
+// rotation (see make_frame), with 4 float layers (IMAGE, FLAGS, VARIANCE, ZODI) plus headers.
+const estCache = new Map();
+let estTimer = null, estId = 0;
+function updateEstimate() {
+  clearTimeout(estTimer);
+  estTimer = setTimeout(async () => {
+    const el = $("sizeEst"), h = heightArcsec(), band = $("band").value;
+    const ra = parseRA($("ra").value), dec = parseDec($("dec").value);
+    if (!h || ra === null || dec === null) { el.textContent = ""; return; }
+    const id = ++estId, key = `${ra.toFixed(5)},${dec.toFixed(5)},${band}`;
+    let n = estCache.get(key);
+    if (n === undefined) {
+      el.textContent = "Estimating download…";
+      try { n = (await getJSON(framesURL(ra, dec, band))).frames.length; estCache.set(key, n); }
+      catch { if (id === estId) el.textContent = ""; return; }
+      if (id !== estId) return;
+    }
+    const shown = Math.min(n, MAX_FRAMES), coverPx = (Math.hypot(h, exploreWidth(h)) + 30) / 6.15;
+    const mb = (shown * (16 * coverPx * coverPx + 60e3)) / 1e6;
+    el.textContent = !n ? `No SPHEREx ${bandShort(band)} images here yet`
+      : `~${shown}${n > shown ? ` of ${n}` : ""} frames · ~${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB · larger = slower`;
+    el.title = "Roughly how much the server downloads from IRSA for this search. Bigger fields mean more data and a slower load.";
+  }, 400);
+}
+
+// The releases (IRSA collections) the server searches, shown in the preview credit.
+async function loadReleases() {
+  try {
+    const d = await getJSON("api/collections");
+    const names = d.in_use.map((c) => c.label);
+    $("pvReleases").textContent = ` · Releases ${names.join(" + ")}`;
+    $("pvReleases").title = "SPHEREx data releases searched: " + d.in_use.map((c) => c.collection).join(", ");
+  } catch { /* the credit simply leaves the releases out */ }
+}
 $("search").addEventListener("submit", (e) => { e.preventDefault(); runSearch(); });
 
 PRESETS.forEach((t) => {
@@ -871,7 +913,7 @@ async function loadGaia(c) {
   const id = ++gaia.id;
   Object.assign(gaia, { data: null, error: null, loading: true });
   drawGaia();
-  const radius = Math.min(0.3, Math.hypot(ex.w, ex.h) / 2 / 3600 + 0.01);
+  const radius = Math.min(0.4, Math.hypot(ex.w, ex.h) / 2 / 3600 + 0.01);   // covers the field's corners
   try {
     const d = await getJSON(`api/gaia?ra=${c.ra}&dec=${c.dec}&radius=${radius.toFixed(4)}&gmax=${GAIA_GMAX}`);
     if (id !== gaia.id) return;
@@ -907,6 +949,7 @@ function drawGaia() {
   let shown = 0;
   for (const st of gaia.data.stars) {
     const pos = gaiaAt(st, f.mjd), q = skyToPix(fld, pos.ra, pos.dec), p = exView.toScreen(q.ix, q.iy);
+    if (!exView.inside(q.ix, q.iy)) continue;   // only over the image (not in the margin around a narrow field)
     if (p.x < -20 || p.y < -20 || p.x > r.width + 20 || p.y > r.height + 20) continue;
     shown++;
     const rad = Math.max(3.5, Math.min(9, 9 - ((st[7] || 19) - 10) * 0.55)) * zs;
@@ -1010,7 +1053,7 @@ function readHash() {
   if (p.has("band") && BANDS[p.get("band")]) $("band").value = p.get("band");
   if (p.has("size")) {   // stored in arcsec
     const m = Math.round(Number(p.get("size")) / 60);
-    if (m >= 1) $("size").value = Math.min(10, m);
+    if (m >= 1) $("size").value = Math.min(MAX_HEIGHT_ARCMIN, m);
   }
   if (p.has("speed")) {
     let s = Number(p.get("speed"));
@@ -1027,6 +1070,7 @@ function readHash() {
 // Start: a link with #ra=…&dec=… opens page 2 directly; otherwise page 1 on the start preset.
 // ======================================================================
 (function start() {
+  loadReleases();
   const c = readHash();
   $("size").dispatchEvent(new Event("input"));
   renderBar();
