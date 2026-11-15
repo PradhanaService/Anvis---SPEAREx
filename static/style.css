@@ -114,7 +114,6 @@ a.tab:hover { color: #0b0b0b; }
 .bkcirc { width: 26px; height: 26px; border-radius: 50%; background: #E03C31; color: #fff; display: flex; align-items: center; justify-content: center; }
 .viewwrap { position: relative; flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; background: #000; color: #fff;
   border: 1px solid #0b0b0b; }
-.viewwrap.fs { position: fixed; inset: 0; z-index: 50; }
 .viewwrap .sky { border: 0; }
 .modelbl { left: 50%; top: 10px; transform: translateX(-50%); padding: 4px 10px; background: #E03C31; color: #fff;
   font-size: 11px; letter-spacing: .06em; white-space: nowrap; max-width: calc(100% - 140px); overflow: hidden; text-overflow: ellipsis; }
@@ -198,7 +197,6 @@ a.tab:hover { color: #0b0b0b; }
   .main .sky { flex: none; height: 62vh; }
   .viewwrap { flex: none; }
   .viewwrap .sky { flex: none; height: 56vh; }
-  .viewwrap.fs .sky { flex: 1 1 auto; height: auto; }
   .cbar { grid-template-columns: 1fr; justify-items: center; padding: 6px 10px; }
   .cleft, .cright { justify-content: center; flex-wrap: wrap; }
   .hintbar, .credit { font-size: 10px; max-width: calc(100% - 80px); }

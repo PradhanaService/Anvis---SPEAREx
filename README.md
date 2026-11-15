@@ -28,8 +28,8 @@ The app has two pages:
    and band D3, and run the search.
 2. **02 Explore** – every SPHEREx image of that field in time order: a date strip, Prev / Play /
    Pause / Next (stops at the ends), speed 0.25x–3x, BLINK (alternate with the previous
-   observation), full screen, zoom and pan,
-   ←/→/space/Esc keys, and a shareable URL (`#ra=...&dec=...&size=...&band=...`).
+   observation), zoom and pan,
+   ←/→/space keys (Esc closes the pop-up), and a shareable URL (`#ra=...&dec=...&size=...&band=...`).
    Red dots on dates show SPHEREx quality flags at the target (from each
    image's FLAGS extension). Click the image for an "About" pop-up with the position, measured
    surface brightness (MJy/sr), wavelength and the original FITS file at IRSA.

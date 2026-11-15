@@ -898,17 +898,9 @@ function gaiaPopRows(c, mjd) {
 }
 $("gaiaBtn").addEventListener("click", () => { gaia.on = !gaia.on; drawGaia(); if (ex.target) writeHash(ex.target); });
 
-// ---- full screen
-function setFs(on) {
-  $("viewwrap").classList.toggle("fs", on);
-  $("fsBtn").setAttribute("aria-pressed", String(on));
-  $("fsBtn").setAttribute("aria-label", on ? "Exit full screen" : "Full screen");
-}
-$("fsBtn").addEventListener("click", () => setFs(!$("viewwrap").classList.contains("fs")));
-
 document.addEventListener("keydown", (e) => {
   if ($("explore").hidden) return;
-  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); else setFs(false); return; }
+  if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); return; }
   if (/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)) return;
   if (e.key === " " && e.target.tagName === "BUTTON") return;
   if (e.key === "ArrowLeft") { stop(); stepFrame(-1); }
@@ -918,7 +910,7 @@ document.addEventListener("keydown", (e) => {
 
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
-  stop(); stopBlink(); setFs(false); ex.searchId++; gaia.id++;
+  stop(); stopBlink(); ex.searchId++; gaia.id++;
   history.replaceState(null, "", location.pathname + location.search);
   $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;
