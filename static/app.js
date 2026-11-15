@@ -292,6 +292,22 @@ async function streamCutouts(list, c, id, onLine) {
     }
   }
 }
+// POST one survey epoch's image URLs to /api/stack; resolves to the co-added frame.
+async function fetchStack(item, c) {
+  const r = await fetch(`api/stack?ra=${c.ra}&dec=${c.dec}&size=${ex.h}&width=${ex.w}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ urls: item.urls }),
+  });
+  let j; try { j = await r.json(); } catch { throw new Error(r.statusText || "Bad response"); }
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Months an epoch spans: "May 2025", "May–Jun 2025" or "Dec 2025–Jan 2026".
+function monthRange(a, b) {
+  const [ya, ma] = [a.slice(0, 4), MONTHS[+a.slice(5, 7) - 1]], [yb, mb] = [b.slice(0, 4), MONTHS[+b.slice(5, 7) - 1]];
+  if (ya !== yb) return `${ma} ${ya}–${mb} ${yb}`;
+  return ma === mb ? `${ma} ${ya}` : `${ma}–${mb} ${ya}`;
+}
 const shortDate = (d) => {   // "2025-05-10 17:04:37" -> { day: "10 May", year: "2025", time: "17:04" }
   const m = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}:\d{2})/.exec(d) || [];
   const mon = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][(+m[2] || 1) - 1];
@@ -594,19 +610,27 @@ PRESETS.forEach((t) => {
 // ======================================================================
 // ex: page-2 state.
 //   target {ra, dec}, band, h/w = field height/width (arcsec)
-//   frames = one entry per SPHEREx image, oldest first ({date, mjd, url, ..., cut, failed});
-//            cut = the processed frame from /api/cutouts once it has arrived
+//   view = "stacks" (one co-added image per survey epoch; the default, less noisy) or "frames"
+//          (every single SPHEREx image)
+//   lists.stacks / lists.frames = the two views' items, oldest first, with loading progress:
+//          {items, started, done, failed, finished}. Each item has {date, mjd, url, ..., cut, failed};
+//          cut = the processed image from the server once it has arrived. Stack items also carry
+//          {stack: true, epoch, start, end, n, urls}.
+//   frames = the items of the current view (lists[view].items); playback, BLINK, the strip and
+//          the pop-up all work on it, so they behave the same in both views
 //   current = index shown; timer/playing/speedIdx = playback; blink* = BLINK state
 //   pick = clicked field pixel {ix, iy} for the About pop-up
 //   searchId bumps on every search, so replies for an older search are ignored
-//   done/failed = cutouts received / failed so far; finished = loading is over
 const ex = {
-  target: null, band: "", h: 0, w: 0,
+  target: null, band: "", h: 0, w: 0, view: "stacks", lists: {},
   frames: [], current: 0, timer: null, playing: false, speedIdx: 2,
   blink: false, blinkAlt: false, blinkTimer: null,
   pick: null,
-  searchId: 0, done: 0, failed: 0, finished: false,
+  searchId: 0,
 };
+const VIEWS = ["stacks", "frames"];
+const STACK_PARALLEL = 2;   // epochs co-added at once (each one already fetches its images in parallel on the server)
+const newList = () => ({ items: [], started: false, done: 0, failed: 0, finished: false });
 const exBox = $("exSky");
 const exView = new SkyView(exBox, $("exZoom"), {
   onPick: (q) => { ex.pick = q; renderPop(); placeExMarks(); },
@@ -623,7 +647,8 @@ function toast(msg) {
   toastTimer = setTimeout(() => { $("toast").hidden = true; }, 2200);
 }
 
-// Switch to page 2 and load every SPHEREx image of the field around c, in time order.
+// Switch to page 2, list every SPHEREx image of the field around c (in time order), group them
+// into survey epochs, and load the current view.
 async function openExplore(c) {
   stop(); stopBlink();
   $("pick").hidden = true; $("explore").hidden = false;
@@ -631,73 +656,136 @@ async function openExplore(c) {
 
   const id = ++ex.searchId;
   Object.assign(ex, { target: c, band: $("band").value, h: heightArcsec(),
-                      frames: [], current: 0, pick: null, done: 0, failed: 0, finished: false });
+                      lists: { stacks: newList(), frames: newList() }, frames: [], current: 0, pick: null });
   ex.w = exploreWidth(ex.h);
   loadGaia(c);
   $("strip").innerHTML = ""; $("exCredit").textContent = "";
   $("pop").hidden = true; $("noObs").hidden = true;
   exView.field = null; exView.clearImage();
   exLoading("Retrieving SPHEREx observations…");
-  renderBar();
+  renderView(); renderBar();
 
   let list;
   try { list = await getJSON(framesURL(c.ra, c.dec, ex.band)); }
   catch (e) {
     if (id !== ex.searchId) return;
     exLoading("");
-    $("noObsTitle").textContent = "Could not search IRSA";
-    $("noObsText").textContent = e.message + ". Go back and try again.";
-    $("noObs").hidden = false; return;
+    showNoObs("Could not search IRSA", e.message + ". Go back and try again.");
+    return;
   }
   if (id !== ex.searchId) return;
 
-  let all = list.frames;
+  const all = list.frames;
   if (!all.length) {
     exLoading("");
-    $("noObsTitle").textContent = "No SPHEREx observations found";
-    $("noObsText").textContent = "Nothing is available for these coordinates in the selected band. Go back and try another position or band.";
-    $("noObs").hidden = false; return;
+    showNoObs("No SPHEREx observations found",
+      "Nothing is available for these coordinates in the selected band. Go back and try another position or band.");
+    return;
   }
+  // Stacks: one per survey epoch, from all of that epoch's images (the server groups them).
+  ex.lists.stacks.items = (list.epochs || []).map((e) => {
+    const members = all.slice(e.first, e.last + 1);
+    return { stack: true, epoch: e.index, start: e.start, end: e.end, n: e.n, date: e.start,
+             mjd: (e.start_mjd + e.end_mjd) / 2, urls: members.map((f) => f.url), url: members[0].url,
+             collection: [...new Set(members.map((f) => f.collection))].join("+"), obs_id: `Survey ${e.index + 1}`,
+             cut: null, failed: false };
+  });
+  // Single frames: if there are very many, show MAX_FRAMES spread evenly in time.
+  let shown = all;
   if (all.length > MAX_FRAMES) {
     const step = all.length / MAX_FRAMES;
-    all = Array.from({ length: MAX_FRAMES }, (_, i) => all[Math.floor(i * step)]);
+    shown = Array.from({ length: MAX_FRAMES }, (_, i) => all[Math.floor(i * step)]);
   }
-  ex.frames = all.map((f) => ({ ...f, cut: null, failed: false }));
-  exLoading(`Retrieving SPHEREx observations… 0 of ${ex.frames.length}`);
-  buildStrip(); renderBar();
+  ex.lists.frames.items = shown.map((f) => ({ ...f, cut: null, failed: false }));
+  if (!ex.lists.stacks.items.length) ex.view = "frames";   // (an older server without epochs)
+  ex.frames = ex.lists[ex.view].items;
+  buildStrip(); renderView(); renderBar(); writeHash(c);
+  loadList(ex.view, id);
+}
 
-  // All cutouts in one streamed request (the server fetches several from IRSA at once);
-  // failed frames get one more try.
+function showNoObs(title, text) {
+  $("noObsTitle").textContent = title; $("noObsText").textContent = text; $("noObs").hidden = false;
+}
+// Loading message for a view's list while its first image is not on screen yet.
+function loadingText(L) {
+  return L === ex.lists.stacks
+    ? `Co-adding survey epochs from IRSA… ${L.done} of ${L.items.length}`
+    : `Retrieving SPHEREx observations… ${L.done} of ${L.items.length}`;
+}
+
+// Load every item of one view ("stacks" or "frames"); failed items get one more try.
+async function loadList(view, id) {
+  const L = ex.lists[view];
+  if (L.started) return;
+  L.started = true;
+  const active = () => ex.frames === L.items;
+  if (active() && !exView.hasImage) exLoading(loadingText(L));
   const received = (f, frame) => {
-    if (frame) { f.cut = frame; if (f.failed) { f.failed = false; ex.failed--; } ex.done++; }
-    else if (!f.failed) { f.failed = true; ex.failed++; }
-    const i = ex.frames.indexOf(f);
+    if (id !== ex.searchId) return;
+    if (frame) { f.cut = frame; if (f.failed) { f.failed = false; L.failed--; } L.done++; }
+    else if (!f.failed) { f.failed = true; L.failed++; }
+    if (!active()) return;   // the other view is on screen; this one keeps loading in the background
+    const i = L.items.indexOf(f);
     updateChip(i);
     if (!exView.hasImage && frame && i === ex.current) exLoading("");
-    else if (!exView.hasImage) exLoading(`Retrieving SPHEREx observations… ${ex.done} of ${ex.frames.length}`);
-    // An earlier frame arriving can change what BLINK compares against.
+    else if (!exView.hasImage) exLoading(loadingText(L));
+    // An earlier item arriving can change what BLINK compares against.
     if (i === ex.current || (ex.blink && i < ex.current)) showFrame();
   };
   for (let pass = 0; pass < 2 && id === ex.searchId; pass++) {
-    const batch = pass === 0 ? ex.frames.slice() : ex.frames.filter((f) => f.failed);
+    const batch = pass === 0 ? L.items.slice() : L.items.filter((f) => f.failed);
     if (!batch.length) break;
-    const got = new Set();
-    try {
-      await streamCutouts(batch, c, id, (msg) => { got.add(msg.i); received(batch[msg.i], msg.frame); });
-    } catch { /* connection lost: anything not received counts as failed below */ }
-    if (id !== ex.searchId) return;
-    batch.forEach((f, i) => { if (!got.has(i)) received(f, null); });
+    if (view === "frames") {
+      // All cutouts in one streamed request (the server fetches several from IRSA at once).
+      const got = new Set();
+      try {
+        await streamCutouts(batch, ex.target, id, (msg) => { got.add(msg.i); received(batch[msg.i], msg.frame); });
+      } catch { /* connection lost: anything not received counts as failed below */ }
+      if (id !== ex.searchId) return;
+      batch.forEach((f, i) => { if (!got.has(i)) received(f, null); });
+    } else {
+      // Stacks: a few epochs at a time, oldest first, so the first one appears quickly.
+      const queue = batch.slice();
+      const worker = async () => {
+        while (queue.length && id === ex.searchId) {
+          const s = queue.shift();
+          try { received(s, await fetchStack(s, ex.target)); } catch { received(s, null); }
+        }
+      };
+      await Promise.all(Array.from({ length: STACK_PARALLEL }, worker));
+    }
   }
   if (id !== ex.searchId) return;
-  ex.finished = true;
+  L.finished = true;
+  if (!active()) return;
   if (!ex.frames[ex.current].cut) { const first = ex.frames.findIndex((f) => f.cut); if (first >= 0) go(first); }
   if (!ex.frames.some((f) => f.cut)) {
     exLoading("");
-    $("noObsTitle").textContent = "Could not load the observations";
-    $("noObsText").textContent = "IRSA did not return any of the images. It may be busy; go back and try again.";
-    $("noObs").hidden = false;
+    showNoObs("Could not load the observations", "IRSA did not return any of the images. It may be busy; go back and try again.");
   }
 }
+
+// ---- VIEW: epoch stacks or single frames. Switching keeps the same moment in time.
+function setView(v) {
+  if (!VIEWS.includes(v) || v === ex.view) return;
+  ex.view = v;
+  renderView();
+  if (!ex.target || !ex.lists[v] || !ex.lists[v].items.length) { writeHash(ex.target); return; }
+  const cur = ex.frames[ex.current];
+  ex.frames = ex.lists[v].items;
+  if (cur) {   // the epoch holding the current frame, or the first frame of the current epoch
+    const k = v === "stacks" ? ex.frames.findIndex((s) => s.epoch === cur.epoch)
+                             : ex.frames.findIndex((f) => f.epoch === cur.epoch);
+    ex.current = Math.max(0, k);
+  }
+  $("noObs").hidden = true;
+  buildStrip(); showFrame(); writeHash(ex.target);
+  loadList(v, ex.searchId);
+}
+function renderView() {
+  document.querySelectorAll("#viewSeg [data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === ex.view)));
+}
+document.querySelectorAll("#viewSeg [data-view]").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view)));
 
 // ---- date strip: one button per image; red dot = SPHEREx quality flags at the target
 const qualityText = (f) => f.cut && f.cut.quality && f.cut.quality.length ? f.cut.quality.map((q) => q.name).join(", ") : "";
@@ -706,7 +794,9 @@ function buildStrip() {
   ex.frames.forEach((f, i) => {
     const d = shortDate(f.date), b = document.createElement("button");
     b.type = "button"; b.className = "fr";
-    b.innerHTML = `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
+    b.innerHTML = f.stack
+      ? `<span class="d">Survey ${f.epoch + 1}</span><span class="t">${esc(monthRange(f.start, f.end))} · ${f.n} frames<span class="dotf" hidden></span></span>`
+      : `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
     b.addEventListener("click", () => go(i));
     strip.appendChild(b);
     updateChip(i);
@@ -720,7 +810,8 @@ function updateChip(i) {
   b.classList.toggle("bad", f.failed);
   b.setAttribute("aria-current", String(i === ex.current));
   b.querySelector(".dotf").hidden = !q;
-  b.setAttribute("aria-label", `${d.day} ${d.year}, ${d.time} UTC${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
+  const what = f.stack ? `Survey epoch ${f.epoch + 1}, ${epochDays(f)}, ${f.n} frames stacked` : `${d.day} ${d.year}, ${d.time} UTC`;
+  b.setAttribute("aria-label", `${what}${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
   b.title = q ? `Quality flags at the target: ${q}` : "";
 }
 function updateStrip() {
@@ -732,6 +823,13 @@ function updateStrip() {
     if (l < strip.scrollLeft) strip.scrollLeft = l - 6;
     else if (r > strip.scrollLeft + strip.clientWidth) strip.scrollLeft = r - strip.clientWidth + 6;
   }
+}
+
+// "3 May – 12 Jun 2025": the first and last day of a survey epoch.
+function epochDays(s) {
+  const a = shortDate(s.start), b = shortDate(s.end);
+  return a.day === b.day && a.year === b.year ? `${a.day} ${a.year}`
+    : a.year === b.year ? `${a.day} – ${b.day} ${b.year}` : `${a.day} ${a.year} – ${b.day} ${b.year}`;
 }
 
 // ---- the picture (the current frame, or during BLINK the frame it is compared with)
@@ -748,17 +846,29 @@ function shownIndex() {
 function showFrame() {
   const k = ex.current, f = ex.frames[k]; if (!f) return;
   const di = shownIndex(), shown = ex.frames[di], d = shortDate(shown.date);
-  $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
-  $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
-    `${bandShort(ex.band)} · 6.15″/px`;
-  $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
-    `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
+  const release = esc(shown.collection.replace(/spherex_/g, "").toUpperCase());
+  if (shown.stack) {
+    const cut = shown.cut, wr = cut && cut.wavelength_range_um;
+    $("shownDate").textContent = `Survey ${shown.epoch + 1} · ${epochDays(shown)}`;
+    $("chanShort").textContent = (wr ? `λ ${wr[0].toFixed(2)}–${wr[1].toFixed(2)} µm · ` : "") +
+      `${cut ? cut.n_used : shown.n} frames stacked · ${bandShort(ex.band)} · 6.15″/px`;
+    $("exCredit").innerHTML = `SPHEREx ${release} · stack of ${shown.n} images from ` +
+      `<a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">IRSA</a> · each file: Single frames view`;
+  } else {
+    $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
+    $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
+      `${bandShort(ex.band)} · 6.15″/px`;
+    $("exCredit").innerHTML = `SPHEREx ${release} · ${esc(shown.obs_id)} · ` +
+      `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
+  }
 
   if (shown.cut) {
     exView.setImage(shown.cut, ex.target.ra, ex.target.dec, DISPLAY);
   } else {
     exView.clearImage();
-    if (!$("explore").hidden && ex.frames.length) exLoading(shown.failed ? "" : "Retrieving this observation…");
+    if (!$("explore").hidden && ex.frames.length) {
+      exLoading(shown.failed ? "" : shown.stack ? `Co-adding survey ${shown.epoch + 1} (${shown.n} images)…` : "Retrieving this observation…");
+    }
   }
   if (exView.hasImage) exLoading("");
   renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks();
@@ -769,7 +879,7 @@ function renderMode() {
   const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
   lbl.hidden = !ex.blink;
   if (!f) return;
-  const day = (x) => shortDate(x.date).day;
+  const day = (x) => x.stack ? `SURVEY ${x.epoch + 1}` : shortDate(x.date).day;
   const skipped = ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
   if (ex.blink) {
     lbl.textContent = !f.cut ? "BLINK · THIS OBSERVATION IS NOT LOADED"
@@ -803,10 +913,28 @@ function renderPop() {
   const de = -(ex.pick.ix - fld.nx / 2) * fld.scale, dn = (fld.ny / 2 - ex.pick.iy) * fld.scale;
   const off = Math.hypot(de, dn), pa = ((Math.atan2(de, dn) * 180 / Math.PI) + 360) % 360;
   $("popId").textContent = `${fmtRA(c.ra)} ${fmtDec(c.dec)}`;
+  const bright = prow("Brightness", val === undefined ? "—" : val === null ? "no data" : `${val.toFixed(3)} MJy/sr`, val === null);
+  if (f.stack) {
+    const cut = f.cut || {}, wr = cut.wavelength_range_um;
+    const rows = [
+      prow("RA", esc(fmtRA(c.ra))), prow("Dec", esc(fmtDec(c.dec))), bright,
+      prow("Survey epoch", esc(`${f.epoch + 1} · ${epochDays(f)}`)),
+      prow("Stacked", f.cut ? `${cut.n_used} of ${cut.n_frames} images` + (cut.n_failed ? ` (${cut.n_failed} failed)` : "") : `${f.n} images`),
+      prow("Wavelengths", wr ? `${wr[0].toFixed(3)}–${wr[1].toFixed(3)} µm` : "—"),
+      prow("Noise (1σ)", cut.noise_mjy_sr != null ? `${cut.noise_mjy_sr.toFixed(3)} MJy/sr` : "—"),
+      prow("Band", esc(`${bandShort(ex.band)} · ${BANDS[ex.band]}`)),
+      prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
+      prow("Source files", `${f.n} FITS files at IRSA · listed in Single frames`),
+    ];
+    $("popRows").innerHTML = rows.join("") + gaiaPopRows(c, f.mjd);
+    $("popNoData").hidden = val !== null;
+    pop.hidden = false; positionPop();
+    return;
+  }
   const rows = [
     prow("RA", esc(fmtRA(c.ra))),
     prow("Dec", esc(fmtDec(c.dec))),
-    prow("Brightness", val === undefined ? "—" : val === null ? "no data" : `${val.toFixed(3)} MJy/sr`, val === null),
+    bright,
     prow("Observed", esc(`${d.day} ${d.year} · ${d.time} UTC`)),
     prow("Wavelength", f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
     prow("Band", esc(`${bandShort(ex.band)} · ${BANDS[ex.band]}`)),
@@ -845,7 +973,7 @@ function nextLoadable(from, dir) {
 function go(i) {
   if (!ex.frames.length) return;
   ex.current = Math.max(0, Math.min(ex.frames.length - 1, i));
-  if (ex.frames[ex.current].failed) toast("This observation could not be loaded from IRSA");
+  if (ex.frames[ex.current].failed) toast(ex.view === "stacks" ? "This survey epoch could not be co-added (IRSA busy?)" : "This observation could not be loaded from IRSA");
   showFrame();
   if (ex.playing) schedule();
 }
@@ -854,7 +982,7 @@ function schedule() {
   if (!ex.playing) return;
   ex.timer = setTimeout(() => {
     const n = nextLoadable(ex.current, 1);
-    if (n < 0) { stop(); toast(`Reached the last observation (${shortDate(ex.frames[ex.current].date).day})`); return; }
+    if (n < 0) { stop(); toast(`Reached the last ${ex.view === "stacks" ? "survey epoch" : "observation"}`); return; }
     go(n);
   }, frameMs());
 }
@@ -867,7 +995,7 @@ function stop() { ex.playing = false; clearTimeout(ex.timer); renderBar(); }
 function stepFrame(dir) {
   if (!ex.frames.length) return;
   const n = nextLoadable(ex.current, dir);
-  if (n < 0) { toast(dir < 0 ? "This is the first observation" : "This is the last observation"); return; }
+  if (n < 0) { toast(`This is the ${dir < 0 ? "first" : "last"} ${ex.view === "stacks" ? "survey epoch" : "observation"}`); return; }
   go(n);
 }
 // Frame counter and the pressed / disabled state of the control-bar buttons.
@@ -971,8 +1099,8 @@ function drawGaia() {
       }
     }
   }
-  const d = shortDate(f.date);
-  lbl.textContent = `GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${d.day} ${d.year}` +
+  const d = shortDate(f.date), when = f.stack ? `mid-survey ${f.epoch + 1}` : `${d.day} ${d.year}`;
+  lbl.textContent = `GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${when}` +
     (gaia.data.truncated ? ` · brightest ${gaia.data.stars.length} only` : "") + ` · arrows: ${GAIA_ARROW_YEARS}-yr motion`;
 }
 // Pop-up rows for the nearest Gaia star to sky position c at the given date.
@@ -1046,6 +1174,7 @@ function writeHash(c) {
   p.set("size", heightArcsec() || 240); p.set("band", $("band").value);
   p.set("speed", SPEED_LIST[ex.speedIdx]);
   if (gaia.on) p.set("gaia", 1);
+  if (ex.view !== "stacks") p.set("view", ex.view);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
@@ -1062,6 +1191,7 @@ function readHash() {
     ex.speedIdx = best;
   }
   gaia.on = p.get("gaia") === "1";
+  ex.view = VIEWS.includes(p.get("view")) ? p.get("view") : "stacks";
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }

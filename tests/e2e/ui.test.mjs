@@ -12,7 +12,8 @@
 import { chromium, devices } from "playwright";
 
 const BASE = process.env.BASE_URL || "http://localhost:8000";
-const BARNARD = "#ra=269.446259&dec=4.768324&size=240&band=SPHEREx-D3";
+const BARNARD_STACKS = "#ra=269.446259&dec=4.768324&size=240&band=SPHEREx-D3";
+const BARNARD = BARNARD_STACKS + "&view=frames";   // most checks are about single frames
 const results = [];
 let browser;
 
@@ -38,8 +39,10 @@ async function open(hash = "", opts = {}) {
   return page;
 }
 const previewReady = (p) => p.waitForFunction(() => document.getElementById("pvLoading").hidden, null, { timeout: 120000 });
-const exploreReady = (p) => p.waitForFunction(() => ex.finished, null, { timeout: 400000 });
+const exploreReady = (p) => p.waitForFunction(() => ex.lists[ex.view] && ex.lists[ex.view].finished, null, { timeout: 400000 });
 const close = (p) => p.context().close();
+// setup for open(): answer requests matching pattern with this status and JSON body
+const routeJSON = (pattern, status, body) => async (page) => page.route(pattern, (r) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }));
 async function newTab(p, action) {        // run action; return the URL of the tab it opens (or null)
   const [tab] = await Promise.all([p.context().waitForEvent("page", { timeout: 5000 }).catch(() => null), action()]);
   const url = tab ? tab.url() : null; if (tab) await tab.close(); return url;
@@ -198,12 +201,104 @@ async function page1() {
   await close(q);
 }
 
+// ================================================================== page 2: epoch stacks
+// Pixel-scale noise of a frame: robust spread of (pixel - mean of its 4 neighbours). Sky structure
+// (stars, background) mostly cancels, so this measures the noise.
+const pixelNoise = (p, cut) => p.evaluate((c) => {
+  const r = [], W = c.width, v = (x, y) => c.data[y * W + x];
+  for (let y = 1; y < c.height - 1; y++) for (let x = 1; x < W - 1; x++) {
+    const a = [v(x, y), v(x - 1, y), v(x + 1, y), v(x, y - 1), v(x, y + 1)];
+    if (a.every((q) => q !== null)) r.push(a[0] - (a[1] + a[2] + a[3] + a[4]) / 4);
+  }
+  r.sort((a, b) => a - b); const m = r[r.length >> 1];
+  const d = r.map((q) => Math.abs(q - m)).sort((a, b) => a - b);
+  return 1.4826 * d[d.length >> 1];
+}, cut);
+
+async function stacks() {
+  const p = await open(BARNARD_STACKS);
+  await exploreReady(p);
+  await check("STACK default view: one chip per survey epoch with its months and frame count", async () => {
+    assert(await p.evaluate(() => ex.view === "stacks"));
+    assert((await p.getAttribute('[data-view="stacks"]', "aria-pressed")) === "true");
+    const n = await p.evaluate(() => ex.frames.length);
+    assert(n >= 2 && (await p.locator(".fr").count()) === n, "epochs " + n);
+    const t = await p.locator(".fr").first().innerText();
+    assert(/^Survey 1\s+\w{3}(–\w{3})? 20\d\d(–\w{3} 20\d\d)? · \d+ frames$/.test(t.trim()), t);
+    const total = await p.evaluate(() => ex.frames.reduce((a, s) => a + s.n, 0));
+    assert(total === await p.evaluate(() => ex.lists.frames.items.length), "every frame in one epoch");
+  });
+  await check("STACK label shows the epoch's dates, wavelength range and frames stacked", async () => {
+    assert(/^Survey 1 · \d{1,2} \w{3}( 20\d\d)? – \d{1,2} \w{3} 20\d\d$|^Survey 1 · \d{1,2} \w{3} 20\d\d$/.test(await p.textContent("#shownDate")), await p.textContent("#shownDate"));
+    assert(/^λ \d\.\d\d–\d\.\d\d µm · \d+ frames stacked · D3 · 6\.15″\/px$/.test(await p.textContent("#chanShort")), await p.textContent("#chanShort"));
+    assert(/stack of \d+ images/.test(await p.textContent("#exCredit")));
+  });
+  await check("VIEW switching to Single frames loads every image", async () => {
+    await p.click('[data-view="frames"]');
+    await p.waitForFunction(() => ex.lists.frames.finished, null, { timeout: 400000 });
+    assert((await p.locator(".fr").count()) === await p.evaluate(() => ex.lists.frames.items.length));
+  });
+  await check("VIEW switching keeps the same epoch and is saved in the URL", async () => {
+    assert(await p.evaluate(() => ex.view === "frames" && ex.frames[ex.current].epoch === 0));
+    assert(/view=frames/.test(await p.evaluate(() => location.hash)));
+    await p.locator(".fr").last().click();
+    const e = await p.evaluate(() => ex.frames[ex.current].epoch);
+    await p.click('[data-view="stacks"]');
+    assert(await p.evaluate((e) => ex.view === "stacks" && ex.current === e, e));
+    assert(!/view=/.test(await p.evaluate(() => location.hash)));
+  });
+  await check("STACK Prev / Next / BLINK step through epochs", async () => {
+    await p.locator(".fr").first().click(); await p.click("#next");
+    assert((await p.textContent("#frameNo")).startsWith("2/"));
+    await p.click("#blinkBtn"); assert(/SURVEY 1 ↔ SURVEY 2/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
+    await p.click("#blinkBtn");
+  });
+  await check("STACK pop-up shows the epoch, images stacked, wavelengths and noise", async () => {
+    const sky = await p.locator("#exSky").boundingBox(); await p.mouse.click(sky.x + sky.width / 3, sky.y + sky.height / 3);
+    const t = await p.textContent("#popRows");
+    assert(/Survey epoch2 ·/.test(t) && /Stacked\d+ of \d+ images/.test(t) && /Wavelengths\d\.\d{3}–\d\.\d{3} µm/.test(t) && /Noise \(1σ\)0\.\d+ MJy\/sr/.test(t), t);
+    await p.click("#popClose");
+  });
+  await check("STACK the VIEW buttons have labels and tooltips", async () => {
+    for (const v of ["stacks", "frames"]) {
+      const b = p.locator(`[data-view="${v}"]`);
+      assert((await b.getAttribute("aria-label")) && (await b.getAttribute("title")).length > 40);
+    }
+  });
+  await close(p);
+
+  // Noise: an uncrowded field (WISE 0855), where pixel-to-pixel scatter is mostly noise.
+  const w = await open("#ra=133.795129&dec=-7.245147&size=600&band=SPHEREx-D3");
+  await exploreReady(w);
+  await check("STACK noise is clearly lower than in a single frame (WISE 0855 field)", async () => {
+    const k = await w.evaluate(() => ex.frames.reduce((b, s, i) => (s.n > ex.frames[b].n ? i : b), 0));   // the biggest epoch
+    await w.locator(".fr").nth(k).click();
+    const st = await w.evaluate(() => ex.frames[ex.current].cut);
+    await w.click('[data-view="frames"]');
+    await w.waitForFunction(() => ex.lists.frames.finished, null, { timeout: 400000 });
+    const one = await w.evaluate(() => ex.frames[ex.current].cut);
+    const a = await pixelNoise(w, st), b = await pixelNoise(w, one);
+    assert(a < 0.6 * b, `stack ${a.toFixed(4)} vs single ${b.toFixed(4)}`);
+  });
+  await close(w);
+
+  const q = await open(BARNARD_STACKS, { setup: routeJSON("**/api/stack*", 502, { error: "IRSA busy" }) });
+  await check("FAIL stacks unavailable: faded epochs and a plain message", async () => {
+    await q.waitForFunction(() => ex.lists.stacks && ex.lists.stacks.finished, null, { timeout: 120000 });
+    assert((await q.locator(".fr.bad").count()) === (await q.locator(".fr").count()));
+    assert(/Could not load/.test(await q.textContent("#noObsTitle")) && await q.isVisible("#noObs"));
+    await q.click('[data-view="frames"]');      // single frames still work
+    assert(await q.isHidden("#noObs"));
+  });
+  await close(q);
+}
+
 // ================================================================== page 2: explore
 async function page2() {
   const p = await open(BARNARD);
   await check("P2 a link with #ra=…&dec=… opens page 2 directly and shows loading", async () => {
     assert(await p.isVisible("#explore"));
-    await p.waitForFunction(() => !document.getElementById("exLoading").hidden || ex.finished, null, { timeout: 30000 });
+    await p.waitForFunction(() => !document.getElementById("exLoading").hidden || (ex.lists.frames && ex.lists.frames.finished), null, { timeout: 30000 });
   });
   await exploreReady(p);
 
@@ -229,9 +324,9 @@ async function page2() {
     const flagged = await p.evaluate(() => ex.frames.filter((f) => f.cut && f.cut.quality.length).length);
     assert((await p.locator(".fr .dotf:not([hidden])").count()) === flagged);
   });
-  await check("P2 header has only Back; control bar has counter, BLINK and GAIA", async () => {
+  await check("P2 header has only Back; control bar has VIEW, counter, BLINK and GAIA", async () => {
     assert((await p.locator(".extop").innerText()).trim() === "Back");
-    assert((await p.locator(".cleft button").allTextContents()).join() === "BLINK,GAIA");
+    assert((await p.locator(".cleft button").allTextContents()).join() === "STACKS,FRAMES,BLINK,GAIA");
     assert((await p.locator("#regionInfo, #flagChip, #diffBtn, #fsBtn, #exZoom [data-zoom=reset]").count()) === 0);
   });
   await check("P2 clicking a date shows that image", async () => {
@@ -356,8 +451,8 @@ async function page2() {
   const big = await open("#ra=269.446259&dec=4.768324&size=1800&band=SPHEREx-D3");
   await check("URL: size=1800 restores a 30′ field and loads it", async () => {
     await exploreReady(big);
-    const s = await big.evaluate(() => ({ h: ex.h, w: ex.w, nx: exView.field.nx, ny: exView.field.ny, slider: $("size").value, loaded: ex.frames.filter((f) => f.cut).length }));
-    assert(s.h === 1800 && s.w === 1800 && s.nx === 293 && s.ny === 293 && s.slider === "30" && s.loaded > 10, JSON.stringify(s));
+    const s = await big.evaluate(() => ({ h: ex.h, w: ex.w, nx: exView.field.nx, ny: exView.field.ny, slider: $("size").value, loaded: ex.frames.filter((f) => f.cut).length, n: ex.frames.length }));
+    assert(s.h === 1800 && s.w === 1800 && s.nx === 293 && s.ny === 293 && s.slider === "30" && s.loaded >= 2 && s.loaded === s.n, JSON.stringify(s));
     assert(/size=1800/.test(big.url()));
   });
   await close(big);
@@ -373,7 +468,6 @@ async function page2() {
 
 // ================================================================== failures (simulated)
 async function failures() {
-  const routeJSON = (pattern, status, body) => async (page) => page.route(pattern, (r) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }));
 
   let p = await open(BARNARD, { setup: routeJSON("**/api/frames*", 502, { error: "IRSA SIA query failed: busy" }) });
   await check("FAIL IRSA search down: page 2 explains and offers Back", async () => {
@@ -454,7 +548,7 @@ async function layout() {
 // ================================================================== run
 browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const t0 = Date.now();
-for (const part of [page1, page2, failures, layout]) {
+for (const part of [page1, page2, stacks, failures, layout]) {
   try { await part(); } catch (e) { results.push([false, `${part.name} crashed: ${e.message}`]); console.log("FAIL", part.name, "crashed:", e.message); }
 }
 await browser.close();

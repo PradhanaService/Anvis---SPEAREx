@@ -17,6 +17,7 @@ Endpoints
   GET  /api/frames       SPHEREx images covering a position in one band, oldest first
   GET  /api/cutout       one frame: zodi-subtracted, resampled north-up (JSON)
   POST /api/cutouts      many frames, streamed back one JSON line each as they finish
+  POST /api/stack        one survey epoch co-added (inverse-variance weighted, bad pixels skipped)
   GET  /api/gaia         Gaia DR3 stars around a position
   GET  /api/collections  the SPHEREx releases searched (ANVIS_COLLECTIONS) and, at a position,
                          every SPHEREx collection IRSA has there
@@ -160,7 +161,16 @@ def frames():
             "url": row["access_url"],
         })
     out.sort(key=lambda f: f["mjd"])
-    return jsonify({"ra": ra, "dec": dec, "band": band, "frames": out})
+    # Survey epochs (see group_epochs): extra fields; the existing ones are unchanged.
+    epochs = []
+    for k, (a, b) in enumerate(group_epochs([f["mjd"] for f in out])):
+        for f in out[a:b + 1]:
+            f["epoch"] = k
+        epochs.append({"index": k, "first": a, "last": b, "n": b - a + 1,
+                       "start_mjd": out[a]["mjd"], "end_mjd": out[b]["mjd"],
+                       "start": out[a]["date"], "end": out[b]["date"]})
+    return jsonify({"ra": ra, "dec": dec, "band": band, "frames": out, "epochs": epochs,
+                    "epoch_rule": {"gap_days": EPOCH_GAP_DAYS, "max_days": EPOCH_MAX_DAYS}})
 
 
 def release_label(collection):
@@ -367,32 +377,35 @@ def target_flags(flags_hdu, xc, yc):
 
 
 class FrameCache:
-    """Least-recently-used cache of frames as JSON text, limited by total size in bytes.
+    """Least-recently-used cache limited by the total size of what it holds (in bytes).
 
-    Frames are kept as JSON text (about a quarter of the memory of the Python objects) and the
-    oldest are dropped once the total passes the limit (ANVIS_CACHE_MB, default 300 MB).
+    Holds processed frames and stacks as JSON text (about a quarter of the memory of the Python
+    objects) and the resampled layers stacks are made from (numpy arrays). The oldest entries are
+    dropped once the total passes the limit (ANVIS_CACHE_MB, default 300 MB, shared by both).
     """
 
     def __init__(self, max_bytes):
         self.max_bytes, self.total = max_bytes, 0
-        self.items = OrderedDict()
+        self.items = OrderedDict()   # key -> (value, size)
         self.lock = threading.Lock()
 
     def get(self, key):
         with self.lock:
-            text = self.items.get(key)
-            if text is not None:
-                self.items.move_to_end(key)
-            return text
+            hit = self.items.get(key)
+            if hit is None:
+                return None
+            self.items.move_to_end(key)
+            return hit[0]
 
-    def put(self, key, text):
+    def put(self, key, value, size=None):
+        size = len(value) if size is None else size
         with self.lock:
             if key in self.items:
-                self.total -= len(self.items.pop(key))
-            self.items[key] = text
-            self.total += len(text)
+                self.total -= self.items.pop(key)[1]
+            self.items[key] = (value, size)
+            self.total += size
             while self.total > self.max_bytes and len(self.items) > 1:
-                self.total -= len(self.items.popitem(last=False)[1])
+                self.total -= self.items.popitem(last=False)[1][1]
 
 
 _frames = FrameCache(int(float(os.environ.get("ANVIS_CACHE_MB", 300)) * 1e6))
@@ -408,23 +421,40 @@ def frame_json(url, ra, dec, size_arcsec, width_arcsec):
     return text
 
 
-def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
-    """One SPHEREx image as a frame of the field centred on (ra, dec).
+def north_up_grid(ra, dec, size_arcsec, width_arcsec):
+    """WCS and pixel size (nx, ny) of the field: north up, east left, native 6.15\" pixels."""
+    ny = max(8, int(round(size_arcsec / 3600.0 / PIXEL_SCALE)))
+    nx = max(8, int(round(width_arcsec / 3600.0 / PIXEL_SCALE)))
+    grid = WCS(naxis=2)
+    grid.wcs.ctype = ["RA---TAN", "DEC--TAN"]
+    grid.wcs.crval = [ra, dec]
+    grid.wcs.crpix = [(nx + 1) / 2, (ny + 1) / 2]
+    grid.wcs.cdelt = [-PIXEL_SCALE, PIXEL_SCALE]
+    return grid, nx, ny
 
-    The field is size_arcsec tall and width_arcsec wide (default: square), on a north-up,
-    east-left grid at the native 6.15" pixel scale, so frames from different visits line up.
-    Returns a dict with the pixel values (MJy/sr, zodiacal light subtracted; None = no data),
-    the wavelength at the target, the quality flags at the target and the observation time.
+
+def frame_layers(url, ra, dec, size_arcsec, width_arcsec):
+    """One SPHEREx image resampled onto the field's north-up grid, as numpy layers. Cached.
+
+    image: surface brightness (MJy/sr), zodiacal light subtracted (as in the tutorial notebooks)
+    variance: its variance, from the VARIANCE extension
+    bad: True where a pixel is unusable – a BAD_FLAGS bit set (nearest detector pixel), or no data
+    Plus the wavelength and quality flags at the target and the observation time. Rows run north
+    to south (row 0 = north = top of the screen).
     """
-    width_arcsec = width_arcsec or size_arcsec
-    size_deg, width_deg = size_arcsec / 3600.0, width_arcsec / 3600.0
+    key = ("layers", url, ra, dec, size_arcsec, width_arcsec)
+    hit = _frames.get(key)
+    if hit is not None:
+        return hit
     # SPHEREx's detector is rotated differently on every visit, so request a square cutout
     # that covers the field's diagonal at any rotation.
     cover = (np.hypot(size_arcsec, width_arcsec) + 30) / 3600.0
     with fetch_cutout(url, ra, dec, round(cover, 5)) as hdul:
         header = hdul["IMAGE"].header
-        # Zodiacal-light-subtracted surface brightness, as in the tutorial notebooks.
         image = hdul["IMAGE"].data.astype(float) - hdul["ZODI"].data.astype(float)
+        variance = hdul["VARIANCE"].data.astype(float)
+        flags = hdul["FLAGS"].data
+        bad_bits = sum(m for m, (name, _) in flag_names(hdul["FLAGS"].header).items() if name in BAD_FLAGS)
         sky = WCS(header)
         xc, yc = sky.world_to_pixel_values(ra, dec)
         # Central wavelength from the spectral WCS (key "W"), as in the cutouts tutorial.
@@ -439,22 +469,121 @@ def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
         quality = target_flags(hdul["FLAGS"], xc, yc)
 
     # Resample onto a common north-up, east-left grid so every frame lines up.
-    ny = max(8, int(round(size_deg / PIXEL_SCALE)))
-    nx = max(8, int(round(width_deg / PIXEL_SCALE)))
-    grid = WCS(naxis=2)
-    grid.wcs.ctype = ["RA---TAN", "DEC--TAN"]
-    grid.wcs.crval = [ra, dec]
-    grid.wcs.crpix = [(nx + 1) / 2, (ny + 1) / 2]
-    grid.wcs.cdelt = [-PIXEL_SCALE, PIXEL_SCALE]
+    grid, nx, ny = north_up_grid(ra, dec, size_arcsec, width_arcsec)
     gy, gx = np.mgrid[0:ny, 0:nx]
     wra, wdec = grid.pixel_to_world_values(gx.ravel(), gy.ravel())
     sx, sy = sky.world_to_pixel_values(wra, wdec)
-    out = bilinear(image, sx, sy).reshape(ny, nx)[::-1]  # row 0 = north (top of screen)
+    out_img = bilinear(image, sx, sy).reshape(ny, nx)[::-1]
+    out_var = bilinear(variance, sx, sy).reshape(ny, nx)[::-1]
+    # Flags are bit masks, so they are not interpolated: take the nearest detector pixel.
+    ix, iy = np.rint(sx).astype(int), np.rint(sy).astype(int)
+    inside = (ix >= 0) & (iy >= 0) & (ix < flags.shape[1]) & (iy < flags.shape[0])
+    flag_bad = np.zeros(ix.shape, bool)
+    flag_bad[inside] = (flags[iy[inside], ix[inside]] & bad_bits) != 0
+    bad = flag_bad.reshape(ny, nx)[::-1] | ~np.isfinite(out_img) | ~(out_var > 0)
+    layers = {"image": out_img.astype(np.float32), "variance": out_var.astype(np.float32), "bad": bad,
+              "nx": nx, "ny": ny, "wavelength": wavelength, "mjd": mjd, "version": version, "quality": quality}
+    _frames.put(key, layers, size=out_img.size * 9 + 1000)
+    return layers
 
-    data = [None if not np.isfinite(v) else round(float(v), 4) for v in out.ravel()]
-    return {"width": nx, "height": ny, "pixel_scale_arcsec": PIXEL_SCALE * 3600,
-            "data": data, "wavelength_um": wavelength, "quality": quality,
-            "mjd_avg": mjd, "pipeline_version": version, "unit": "MJy/sr"}
+
+def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
+    """One SPHEREx image as a frame of the field centred on (ra, dec).
+
+    The field is size_arcsec tall and width_arcsec wide (default: square), on a north-up,
+    east-left grid at the native 6.15" pixel scale, so frames from different visits line up.
+    Returns a dict with the pixel values (MJy/sr, zodiacal light subtracted; None = no data),
+    the wavelength at the target, the quality flags at the target and the observation time.
+    """
+    L = frame_layers(url, ra, dec, size_arcsec, width_arcsec or size_arcsec)
+    data = [None if not np.isfinite(v) else round(float(v), 4) for v in L["image"].ravel()]
+    return {"width": L["nx"], "height": L["ny"], "pixel_scale_arcsec": PIXEL_SCALE * 3600,
+            "data": data, "wavelength_um": L["wavelength"], "quality": L["quality"],
+            "mjd_avg": L["mjd"], "pipeline_version": L["version"], "unit": "MJy/sr"}
+
+
+# ----------------------------------------------------------------------------- epochs and stacks
+# SPHEREx maps the whole sky every six months; each part of the sky is seen in a burst of
+# exposures (a "survey epoch") lasting days to weeks. Frames are grouped into epochs by time:
+EPOCH_GAP_DAYS = 30.0    # a new epoch starts after a gap of more than 30 days between frames,
+EPOCH_MAX_DAYS = 120.0   # or when an epoch would last more than 120 days (near the ecliptic poles
+                         # SPHEREx sees a field almost continuously, so there may be no gaps).
+MAX_STACK_FRAMES = 200   # most frames combined into one stack (spread evenly over the epoch)
+
+
+def group_epochs(mjds):
+    """[(first, last)] index ranges of survey epochs in a sorted list of MJDs (see the rule above)."""
+    out = []
+    for i, m in enumerate(mjds):
+        if not out or m - mjds[i - 1] > EPOCH_GAP_DAYS or m - mjds[out[-1][0]] > EPOCH_MAX_DAYS:
+            out.append([i, i])
+        else:
+            out[-1][1] = i
+    return [tuple(e) for e in out]
+
+
+def combine(layers):
+    """Inverse-variance weighted mean of resampled frames, skipping bad pixels.
+
+    Each pixel is sum(w x) / sum(w) with w = 1/variance over the frames where it is good; its
+    variance is 1/sum(w). Where a pixel is bad in every frame (typically the saturated core of a
+    bright star, flagged in all of them) the flagged values are averaged instead, so the star
+    does not turn into a hole; those pixels are counted in `fallback`. Pixels with no finite
+    value at all come out NaN. Returns (mean, var, n, fallback) with n = how many good frames
+    contributed to each pixel.
+    """
+    def weighted(use):
+        num = np.zeros(layers[0]["image"].shape)
+        den = np.zeros_like(num)
+        for L, u in zip(layers, use):
+            w = np.where(u, 1.0 / np.where(u, L["variance"], 1.0), 0.0)
+            num += w * np.where(u, L["image"], 0.0)
+            den += w
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.where(den > 0, num / den, np.nan), np.where(den > 0, 1.0 / den, np.nan)
+
+    good = [~L["bad"] for L in layers]
+    mean, var = weighted(good)
+    n = np.sum(good, axis=0)
+    hole = n == 0
+    if hole.any():
+        usable = [hole & np.isfinite(L["image"]) & (L["variance"] > 0) for L in layers]
+        m2, v2 = weighted(usable)
+        mean, var = np.where(hole, m2, mean), np.where(hole, v2, var)
+    return mean, var, n, int((hole & np.isfinite(mean)).sum())
+
+
+def make_stack(urls, ra, dec, size_arcsec, width_arcsec):
+    """One survey epoch: the frames at urls co-added on the field's grid (see combine)."""
+    futures = [_pool.submit(frame_layers, u, ra, dec, size_arcsec, width_arcsec) for u in urls]
+    layers, failed = [], 0
+    for fut in futures:
+        try:
+            layers.append(fut.result())
+        except Exception as e:
+            failed += 1
+            app.logger.warning("stack: frame failed: %s", e)
+    if not layers:
+        raise RuntimeError("none of the epoch's frames could be loaded from IRSA")
+    mean, var, n, fallback = combine(layers)
+    waves = [L["wavelength"] for L in layers if L["wavelength"]]
+    mjds = [L["mjd"] for L in layers if L["mjd"]]
+    quality = {q["name"]: q for L in layers for q in L["quality"]}   # union of the frames' flags at the target
+    return {
+        "width": layers[0]["nx"], "height": layers[0]["ny"], "pixel_scale_arcsec": PIXEL_SCALE * 3600,
+        "data": [None if not np.isfinite(v) else round(float(v), 4) for v in mean.ravel()],
+        "unit": "MJy/sr", "wavelength_um": None,
+        "wavelength_range_um": [min(waves), max(waves)] if waves else None,
+        "mjd_start": min(mjds) if mjds else None, "mjd_end": max(mjds) if mjds else None,
+        "n_frames": len(urls), "n_used": len(layers), "n_failed": failed,
+        "median_frames_per_pixel": float(np.median(n)), "flagged_only_pixels": fallback,
+        "noise_mjy_sr": float(np.sqrt(np.nanmedian(var[n > 0]))) if (n > 0).any() else None,
+        "quality": sorted(quality.values(), key=lambda q: q["name"]),
+    }
+
+
+def valid_spherex_url(url):
+    return isinstance(url, str) and url.startswith(DATA_PREFIX) and url.endswith(".fits") and "?" not in url
 
 
 @app.get("/api/cutout")
@@ -525,6 +654,47 @@ def cutouts():
                 fut.cancel()
 
     return Response(generate(), mimetype="application/x-ndjson")
+
+
+@app.post("/api/stack")
+def stack():
+    """One survey epoch co-added: ?ra&dec&size&width (arcsec), body {"urls": [the epoch's frames]}.
+
+    Returns a frame-like object (width, height, data, ...) on the same north-up grid as
+    /api/cutout, plus the epoch's date range, frame counts, wavelength range and the union of
+    the frames' quality flags at the target. More than MAX_STACK_FRAMES urls are thinned evenly.
+    """
+    try:
+        ra, dec = parse_position()
+        size = float(request.args.get("size", 180))
+        width = float(request.args.get("width", size))
+    except ValueError as e:
+        return bad(str(e))
+    if not 30 <= size <= MAX_SIZE_ARCSEC:
+        return bad(f"size must be between 30 and {MAX_SIZE_ARCSEC} arcsec")
+    if not 30 <= width <= MAX_WIDTH_ARCSEC:
+        return bad(f"width must be between 30 and {MAX_WIDTH_ARCSEC} arcsec")
+    urls = (request.get_json(silent=True) or {}).get("urls")
+    if not isinstance(urls, list) or not 1 <= len(urls) <= MAX_BATCH:
+        return bad(f"body must be {{\"urls\": [...]}} with 1 to {MAX_BATCH} URLs")
+    if not all(valid_spherex_url(u) for u in urls):
+        return bad("every url must be an IRSA SPHEREx image URL")
+    if len(urls) > MAX_STACK_FRAMES:
+        step = len(urls) / MAX_STACK_FRAMES
+        urls = [urls[int(i * step)] for i in range(MAX_STACK_FRAMES)]
+    args = (round(ra, 6), round(dec, 6), round(size), round(width))
+    key = ("stack", tuple(sorted(urls))) + args
+    text = _frames.get(key)
+    if text is None:
+        try:
+            text = json.dumps(make_stack(urls, *args), separators=(",", ":"))
+        except Exception as e:
+            app.logger.warning("stack failed: %s", e)
+            return bad(str(e), 502)
+        _frames.put(key, text)
+    resp = Response(text, mimetype="application/json")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 # ----------------------------------------------------------------------------- Gaia

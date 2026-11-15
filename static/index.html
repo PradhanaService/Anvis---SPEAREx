@@ -139,6 +139,13 @@
 
     <div class="cbar">
       <div class="cleft">
+        <div class="seg" id="viewSeg" role="group" aria-label="View: epoch stacks or single frames">
+          <span class="seglbl mono" aria-hidden="true">VIEW</span>
+          <button class="md" type="button" data-view="stacks" aria-pressed="true" aria-label="Epoch stacks"
+            title="Epoch stacks: all images from one survey visit (a few weeks) averaged into one clean picture, weighted by their noise. Less noise, so faint objects and motion between visits are easier to see.">STACKS</button>
+          <button class="md" type="button" data-view="frames" aria-pressed="false" aria-label="Single frames"
+            title="Single frames: every SPHEREx image on its own, in time order. Noisier, but shows each exposure and its exact date and wavelength.">FRAMES</button>
+        </div>
         <span class="mono small" id="frameNo">0/0</span>
         <button class="md" type="button" id="blinkBtn" aria-pressed="false">BLINK</button>
         <button class="md" type="button" id="gaiaBtn" aria-pressed="false" title="Overlay Gaia DR3 stars (from MAST), moved to each frame's date">GAIA</button>
