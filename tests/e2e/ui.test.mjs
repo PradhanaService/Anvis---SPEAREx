@@ -419,7 +419,7 @@ async function page2() {
     assert((await p.locator(".fr .dotf:not([hidden])").count()) === flagged);
   });
   await check("P2 header has only Back; control bar has VIEW, counter, MODE and GAIA", async () => {
-    assert((await p.locator(".extop").innerText()).trim() === "Back");
+    assert((await p.locator(".extop").innerText()).replace(/\s+/g, " ").trim() === "Back HOW TO USE", await p.locator(".extop").innerText());
     const groups = await p.$$eval(".cbar .tgroup", (gs) => gs.map((g) => [g.querySelector(".glbl") ? g.querySelector(".glbl").textContent : g.getAttribute("aria-label"),
       [...g.querySelectorAll("button")].map((b) => b.textContent.trim() || b.getAttribute("aria-label")).join("/")].join(":")));
     assert(groups.join(" | ") === "VIEW:STACKS/FRAMES/LOCK | MODE:NORMAL/BLINK/DIFF | SHOW:GAIA/WISE/CURVE | Playback:Previous image/Play/Pause/Next image | SPEED:+/−", groups.join(" | "));
