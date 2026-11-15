@@ -7,9 +7,22 @@ All SPHEREx data comes from NASA/IPAC IRSA:
   * Pixels: IRSA's cutout service, appended to each spectral image URL as
     ?center=<ra>,<dec>d&size=<deg> (as in the "SPHEREx Spectral Image
     Cutouts" tutorial notebook).
+Gaia DR3 stars for the overlay come from MAST (STScI) through its TAP service.
 
 The browser can't call IRSA directly (no CORS headers), so this server
 fetches for it and returns small JSON arrays.
+
+Endpoints
+  GET  /                 the web page (static/index.html)
+  GET  /api/frames       SPHEREx images covering a position in one band, oldest first
+  GET  /api/cutout       one frame: zodi-subtracted, resampled north-up (JSON)
+  POST /api/cutouts      many frames, streamed back one JSON line each as they finish
+  GET  /api/gaia         Gaia DR3 stars around a position
+
+Caches (all in memory unless noted)
+  * IRSA searches (sia_rows) and Gaia cones (gaia_cone): functools.lru_cache.
+  * Processed frames: FrameCache, limited by size (ANVIS_CACHE_MB, default 300 MB).
+  * WCS-WAVE wavelength tables: in memory and on disk in cache/ (ANVIS_CACHE).
 """
 
 import concurrent.futures as cf
@@ -46,22 +59,26 @@ MAX_SIZE_ARCSEC = 1800    # field height (and width, for square fields)
 MAX_WIDTH_ARCSEC = 1800   # field width for wide fields
 USER_AGENT = "anvis/1.0"
 
-# Be polite to IRSA: limit concurrent cutout downloads from this server.
-_irsa_slots = threading.Semaphore(10)
-# Worker threads for /api/cutouts (each one waits on _irsa_slots before calling IRSA).
+# Be polite to IRSA and MAST: at most 10 requests to them at a time from this server
+# (more made IRSA answer "busy" much more often, for little gain).
+_remote_slots = threading.Semaphore(10)
+# Worker threads for /api/cutouts (each one waits on _remote_slots before calling IRSA).
 _pool = cf.ThreadPoolExecutor(max_workers=10)
-MAX_BATCH = 400
+MAX_BATCH = 400   # most frames one /api/cutouts request may ask for
 
 app = Flask(__name__, static_folder="static", static_url_path="")
 session = requests.Session()
 session.headers["User-Agent"] = USER_AGENT
 
 
+# ----------------------------------------------------------------------------- request helpers
 def bad(msg, code=400):
+    """A JSON error response: {"error": msg} with the given HTTP status."""
     return jsonify({"error": msg}), code
 
 
 def parse_position():
+    """(ra, dec) in decimal degrees from the query string; ValueError if missing or out of range."""
     try:
         ra = float(request.args["ra"])
         dec = float(request.args["dec"])
@@ -74,9 +91,11 @@ def parse_position():
 
 @app.get("/")
 def index():
+    """The single-page app; its CSS and JS are served from static/ by Flask."""
     return send_from_directory(app.static_folder, "index.html")
 
 
+# ----------------------------------------------------------------------------- finding images (SIA)
 SIA_COLUMNS = ("energy_bandpassname", "dataproduct_subtype", "access_url", "obs_id", "obs_collection", "t_min")
 
 
@@ -85,7 +104,7 @@ def sia_rows(ra, dec):
     """All SPHEREx images (every band) covering a position, from IRSA's SIA service. Cached."""
     params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "20000")]
     params += [("COLLECTION", c) for c in COLLECTIONS]
-    text = irsa_get(SIA_URL, params=params, timeout=120).text
+    text = remote_get(SIA_URL, params=params, timeout=120).text
     # Keep only the columns used below, so cached searches stay small.
     return tuple({k: row.get(k) for k in SIA_COLUMNS} for row in csv.DictReader(io.StringIO(text)))
 
@@ -125,15 +144,18 @@ def frames():
     return jsonify({"ra": ra, "dec": dec, "band": band, "frames": out})
 
 
-def irsa_get(url, params=None, timeout=180, tries=12, n_hdus=None):
-    """GET from IRSA, retrying when it is busy or briefly unavailable (429/5xx).
+# ----------------------------------------------------------------------------- talking to IRSA / MAST
+def remote_get(url, params=None, timeout=180, tries=12, n_hdus=None):
+    """GET from IRSA (or MAST), retrying when it is busy or briefly unavailable (429/5xx).
+
+    Waits 0.5 s before the first retry, growing to at most 5 s; other HTTP errors are raised.
 
     With n_hdus, read only the first n_hdus FITS HDUs of the response and return their bytes.
     """
     delay = 0.5
     for attempt in range(tries):
         try:
-            with _irsa_slots:
+            with _remote_slots:
                 r = session.get(url, params=params, timeout=timeout, stream=n_hdus is not None)
                 if r.status_code == 200:
                     if n_hdus is None:
@@ -194,6 +216,7 @@ def read_first_hdus(chunks, n_hdus):
     return bytes(buf[:pos])
 
 
+# ----------------------------------------------------------------------------- cutouts and frames
 _wave_tables = {}  # (detector, pipeline version) -> WCS-WAVE table HDU
 _wave_lock = threading.Lock()
 # WCS-WAVE tables are also saved here, so they survive a server restart.
@@ -201,6 +224,7 @@ CACHE_DIR = os.environ.get("ANVIS_CACHE", os.path.join(os.path.dirname(os.path.a
 
 
 def _wave_path(key):
+    """Disk path of the saved WCS-WAVE table for (detector, pipeline version)."""
     name = re.sub(r"[^A-Za-z0-9._-]", "_", f"wcswave_D{key[0]}_{key[1]}")
     return os.path.join(CACHE_DIR, name + ".fits")
 
@@ -213,9 +237,9 @@ def fetch_cutout(url, ra, dec, size_deg):
     detector and pipeline version, so it is downloaded once and reused.
     """
     full = f"{url}?center={ra},{dec}d&size={size_deg}"
-    hdul = fits.HDUList.fromstring(irsa_get(full, n_hdus=5))
+    hdul = fits.HDUList.fromstring(remote_get(full, n_hdus=5))
     if [h.name for h in hdul] != ["PRIMARY", "IMAGE", "FLAGS", "VARIANCE", "ZODI"]:
-        return fits.HDUList.fromstring(irsa_get(full).content)  # unexpected layout: take it all
+        return fits.HDUList.fromstring(remote_get(full).content)  # unexpected layout: take it all
     key = (hdul["IMAGE"].header.get("DETECTOR"), hdul[0].header.get("VERSION"))
     if key not in _wave_tables:
         with _wave_lock:
@@ -225,7 +249,7 @@ def fetch_cutout(url, ra, dec, size_deg):
                     with fits.open(path) as saved:
                         _wave_tables[key] = saved["WCS-WAVE"].copy()
                 except (OSError, KeyError):
-                    whole = fits.HDUList.fromstring(irsa_get(full).content)
+                    whole = fits.HDUList.fromstring(remote_get(full).content)
                     _wave_tables[key] = whole["WCS-WAVE"].copy()
                     try:
                         os.makedirs(CACHE_DIR, exist_ok=True)
@@ -252,7 +276,7 @@ def bilinear(img, x, y):
 
 # Flags that make a pixel unreliable: the conservative CONTAINS_BAD_PIXEL set from the SPHEREx
 # Explanatory Supplement (Table 16), as used in IRSA's "Source Discovery Tool" tutorial.
-# Shown as the quality chip / red date dots when set within 1 pixel of the target.
+# Shown as red dots on the explore page's date strip when set within 1 pixel of the target.
 BAD_FLAGS = {"TRANSIENT", "OVERFLOW", "SUR_ERROR", "NONFUNC", "DICHROIC", "MISSING_DATA", "HOT", "COLD",
              "NONLINEAR", "CROSSTALK", "GHOST", "GHOST_FPA", "GHOST_EXT", "STREAK", "PERSIST", "BLOOM",
              "SNOWBALL", "HALO", "SATELLITE_HALO"}
@@ -268,7 +292,6 @@ def flag_names(header):
             if mask:
                 out[int(mask)] = (str(header[key]), str(header.get("MSKD" + n, "")))
     return out
-
 
 
 def target_flags(flags_hdu, xc, yc):
@@ -326,7 +349,13 @@ def frame_json(url, ra, dec, size_arcsec, width_arcsec):
 
 
 def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
-    """One frame: height size_arcsec, width width_arcsec (default: square)."""
+    """One SPHEREx image as a frame of the field centred on (ra, dec).
+
+    The field is size_arcsec tall and width_arcsec wide (default: square), on a north-up,
+    east-left grid at the native 6.15" pixel scale, so frames from different visits line up.
+    Returns a dict with the pixel values (MJy/sr, zodiacal light subtracted; None = no data),
+    the wavelength at the target, the quality flags at the target and the observation time.
+    """
     width_arcsec = width_arcsec or size_arcsec
     size_deg, width_deg = size_arcsec / 3600.0, width_arcsec / 3600.0
     # SPHEREx's detector is rotated differently on every visit, so request a square cutout
@@ -370,6 +399,7 @@ def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
 
 @app.get("/api/cutout")
 def cutout():
+    """One frame (see make_frame) for ?ra&dec&size&width (arcsec) and url (an IRSA SPHEREx image)."""
     try:
         ra, dec = parse_position()
         size = float(request.args.get("size", 180))
@@ -447,10 +477,15 @@ GAIA_EPOCH = 2016.0   # Gaia DR3 reference epoch (Julian year) for ra, dec
 
 @lru_cache(maxsize=256)
 def gaia_cone(ra, dec, radius_deg, gmax):
+    """Gaia DR3 stars brighter than gmax within radius_deg of (ra, dec), as compact JSON text.
+
+    Each star is [source_id (text: too big for a JavaScript number), ra, dec, pmra, pmdec,
+    parallax, parallax_error, G, BP-RP]. Only numbers reach the query: the endpoint checks them.
+    """
     query = (f"SELECT TOP {GAIA_MAX_STARS} {', '.join(GAIA_COLUMNS)} FROM dbo.gaia_source "
              f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra}, {dec}, {radius_deg})) "
              f"AND phot_g_mean_mag < {gmax} ORDER BY phot_g_mean_mag")
-    r = irsa_get(MAST_GAIA_TAP, params={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query}, timeout=120)
+    r = remote_get(MAST_GAIA_TAP, params={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query}, timeout=120)
     table = parse_single_table(io.BytesIO(r.content)).to_table()
 
     def num(v, nd):

@@ -1,3 +1,5 @@
 .venv/
 __pycache__/
 cache/
+tests/e2e/node_modules/
+.pytest_cache/

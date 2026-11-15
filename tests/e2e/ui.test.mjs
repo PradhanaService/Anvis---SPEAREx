@@ -1,0 +1,444 @@
+// End-to-end test of every part of the Anvis web page, in a real (headless) browser.
+//
+// Start the app first (python app.py), then, from this folder:
+//     npm install            # once: installs Playwright
+//     npx playwright install chromium   # once: downloads the browser
+//     node ui.test.mjs       # or: BASE_URL=http://host:port node ui.test.mjs
+//
+// It uses live SPHEREx data from IRSA and Gaia data from MAST (internet needed). Failures of
+// those services are simulated by intercepting the page's own requests. Each check prints
+// PASS or FAIL; the exit code is the number of failures.
+
+import { chromium, devices } from "playwright";
+
+const BASE = process.env.BASE_URL || "http://localhost:8000";
+const BARNARD = "#ra=269.446259&dec=4.768324&size=240&band=SPHEREx-D3";
+const results = [];
+let browser;
+
+// ------------------------------------------------------------------ tiny test harness
+async function check(name, fn) {
+  try { await fn(); results.push([true, name]); console.log("PASS", name); }
+  catch (e) { results.push([false, name]); console.log("FAIL", name, "\n     ", String(e.message || e).split("\n")[0]); }
+}
+function assert(cond, msg) { if (!cond) throw new Error(msg || "assertion failed"); }
+const near = (a, b, tol) => Math.abs(a - b) <= tol;
+
+// A fresh page; console errors and page errors are collected in page.errors.
+async function open(hash = "", opts = {}) {
+  const ctx = await browser.newContext({ viewport: { width: 1440, height: 820 }, ...opts });
+  // Original-file links point at ~70 MB FITS files: answer them locally instead of downloading.
+  await ctx.route("https://irsa.ipac.caltech.edu/ibe/**", (r) => r.fulfill({ status: 200, contentType: "text/plain", body: "FITS" }));
+  const page = await ctx.newPage();
+  page.errors = [];
+  page.on("pageerror", (e) => page.errors.push(e.message));
+  page.on("console", (m) => { if (m.type() === "error" && !/Failed to load resource/.test(m.text())) page.errors.push(m.text()); });
+  if (opts.setup) await opts.setup(page);
+  await page.goto(BASE + "/" + hash);
+  return page;
+}
+const previewReady = (p) => p.waitForFunction(() => document.getElementById("pvLoading").hidden, null, { timeout: 120000 });
+const exploreReady = (p) => p.waitForFunction(() => ex.finished, null, { timeout: 400000 });
+const close = (p) => p.context().close();
+async function newTab(p, action) {        // run action; return the URL of the tab it opens (or null)
+  const [tab] = await Promise.all([p.context().waitForEvent("page", { timeout: 5000 }).catch(() => null), action()]);
+  const url = tab ? tab.url() : null; if (tab) await tab.close(); return url;
+}
+// How many non-black pixels a canvas has (is a picture drawn?).
+const litPixels = (p, sel) => p.$eval(sel, (c) => {
+  const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0;
+  for (let i = 0; i < d.length; i += 16) if (d[i] + d[i + 1] + d[i + 2] > 60) n++;
+  return n;
+});
+async function dragSlider(p, frac) {
+  const k = await p.locator(".gocirc").boundingBox(), g = await p.locator("#goSlide").boundingBox();
+  const x0 = k.x + k.width / 2, y = k.y + k.height / 2, dist = (g.width - k.width - 10) * frac;
+  await p.mouse.move(x0, y); await p.mouse.down();
+  for (let i = 1; i <= 10; i++) await p.mouse.move(x0 + (dist * i) / 10, y);
+  await p.mouse.up(); await p.waitForTimeout(450);
+}
+
+// ================================================================== page 1: pick
+async function page1() {
+  const p = await open();
+  await previewReady(p);
+
+  await check("P1 preview: a real SPHEREx image is drawn, labelled with the start preset", async () => {
+    assert((await litPixels(p, "#pvSky canvas")) > 500, "canvas is blank");
+    assert((await p.textContent("#pvName")) === "Barnard's Star");
+    assert(/D3 · 1\.63–2\.41 µm · 6\.15″\/px/.test(await p.textContent("#pvSubl")));
+  });
+  await check("P1 preview credit links to the image file at IRSA", async () => {
+    const url = await newTab(p, () => p.click("#pvCredit a"));
+    assert(url && url.startsWith("https://irsa.ipac.caltech.edu/ibe/data/spherex/"), "no tab: " + url);
+  });
+  await check("P1 sidebar: fields filled from the start preset, preset highlighted", async () => {
+    assert((await p.inputValue("#ra")) === "269.44626" && (await p.inputValue("#dec")) === "+4.76832");
+    assert((await p.textContent("#raHint")) === "= 17h 57m 47.1s");
+    assert((await p.locator(".pr.on").allTextContents()).join() === "Barnard's Star");
+  });
+  await check("P1 dashed field box shows the area Search will fetch", async () => {
+    assert(await p.isVisible(".region"));
+    assert(/^4′ × [\d.]+′ FIELD$/.test(await p.textContent(".region .rtag")));
+  });
+
+  const sky = await p.locator("#pvSky").boundingBox();
+  await check("P1 hover: crosshair and RA/Dec read-out follow the mouse", async () => {
+    await p.mouse.move(sky.x + sky.width * 0.3, sky.y + sky.height * 0.4);
+    assert(await p.isVisible(".cross-h") && await p.isVisible(".cross-v"));
+    assert(/^RA\s+\d\dh \d\dm \d\d\.\ds\nDEC [+−]\d\d° \d\d′ \d\d″$/.test(await p.textContent(".hovertag")));
+    await p.mouse.move(sky.x - 50, sky.y - 50);
+    assert(await p.isHidden(".hovertag"), "read-out stays after leaving");
+  });
+  await check("P1 click picks a position: fields, label, ring, presets update", async () => {
+    await p.mouse.click(sky.x + sky.width * 0.3, sky.y + sky.height * 0.4);
+    assert((await p.inputValue("#ra")) !== "269.44626", "RA not updated");
+    assert((await p.textContent("#pvName")) === "Custom field");
+    assert(await p.isVisible(".selmark .ring"), "selection ring");
+    assert((await p.locator(".pr.on").count()) === 0);
+  });
+  await check("P1 zoom buttons, mouse wheel and drag-to-pan", async () => {
+    await p.click('#pvZoom [data-zoom="in"]');
+    assert((await p.textContent("#pvZoom .zpct")) === "150%");
+    await p.click('#pvZoom [data-zoom="out"]');
+    assert((await p.textContent("#pvZoom .zpct")) === "100%");
+    await p.mouse.move(sky.x + sky.width / 2, sky.y + sky.height / 2); await p.mouse.wheel(0, -300); await p.waitForTimeout(150);
+    assert((await p.textContent("#pvZoom .zpct")) !== "100%", "wheel did not zoom");
+    const t0 = await p.evaluate(() => pvView.tx);
+    await p.mouse.move(sky.x + 500, sky.y + 300); await p.mouse.down(); await p.mouse.move(sky.x + 380, sky.y + 260, { steps: 6 }); await p.mouse.up();
+    assert((await p.evaluate(() => pvView.tx)) !== t0, "drag did not pan");
+    assert((await p.inputValue("#ra")) !== "", "drag must not clear the pick");
+  });
+  await check("P1 there are only zoom in / zoom out buttons (no reset, no tabs)", async () => {
+    const labels = await p.locator("#pvZoom button").evaluateAll((b) => b.map((x) => x.getAttribute("aria-label")));
+    assert(labels.join() === "Zoom in,Zoom out", labels.join());
+    assert((await p.locator(".tabs, .tab, .scale, .disclaim").count()) === 0);
+  });
+  await check("P1 coordinate parsing: degrees and sexagesimal, with hints", async () => {
+    await p.fill("#ra", "14 03 12.5"); await p.fill("#dec", "+54 20 56");
+    assert((await p.textContent("#raHint")) === "= 14h 03m 12.5s");
+    assert((await p.textContent("#decHint")) === "= +54° 20′ 56″");
+    await p.fill("#ra", "210.80227");
+    assert((await p.textContent("#raHint")) === "= 14h 03m 12.5s");
+  });
+  await check("P1 typing a far-away position re-centres the preview there", async () => {
+    await p.press("#dec", "Tab");
+    await p.waitForFunction(() => Math.abs(pk.center.ra - 210.80227) < 1e-4, null, { timeout: 10000 });
+    await previewReady(p);
+    assert((await litPixels(p, "#pvSky canvas")) > 500);
+  });
+  await check("P1 invalid input shows clear errors and blocks the search", async () => {
+    await p.fill("#ra", "400"); await p.press("#ra", "Tab");
+    assert(/RA should be/.test(await p.textContent("#err")));
+    await p.fill("#ra", "210.8"); await p.fill("#dec", "95"); await p.press("#dec", "Tab");
+    assert(/Dec should be/.test(await p.textContent("#err")));
+    await p.fill("#dec", ""); await p.focus("#goSlide"); await p.keyboard.press("Enter");
+    assert(/Enter both/.test(await p.textContent("#err")) && await p.isVisible("#pick"));
+    await p.fill("#dec", "+54.34895"); await p.fill("#size", "11"); await p.dispatchEvent("#size", "input");
+    await p.focus("#goSlide"); await p.keyboard.press("Enter");
+    assert(/Height should be 1–10/.test(await p.textContent("#err")) && await p.isVisible("#pick"));
+    await p.fill("#size", "4"); await p.dispatchEvent("#size", "input");
+  });
+  await check("P1 height hint shows the field size", async () => {
+    assert(/^Field 4′ × [\d.]+′$/.test(await p.textContent("#sizeHint")));
+  });
+  await check("P1 changing the band reloads the preview in that band", async () => {
+    await p.selectOption("#band", "SPHEREx-D5"); await previewReady(p);
+    assert(/^D5 · 3\.83–4\.41 µm/.test(await p.textContent("#pvSubl")));
+    assert(/SPHEREx D5/.test(await p.textContent("#pvCredit")));
+    await p.selectOption("#band", "SPHEREx-D3"); await previewReady(p);
+  });
+  await check("P1 slide to search: a half slide springs back, a click only nudges", async () => {
+    await dragSlider(p, 0.5);
+    assert(await p.isVisible("#pick"), "half slide searched");
+    assert((await p.evaluate(() => getComputedStyle(goKnob).transform)).match(/none|matrix\(1, 0, 0, 1, 0, 0\)/));
+    await p.click("#goSlide"); await p.waitForTimeout(100);
+    assert(await p.evaluate(() => goBtn.classList.contains("nudge")) && await p.isVisible("#pick"));
+  });
+  await check("P1 slide to search: a full slide opens page 2 for the typed position", async () => {
+    const typed = await p.evaluate(() => parseRA($("ra").value));
+    await dragSlider(p, 1);
+    assert(await p.isVisible("#explore"));
+    assert(near(await p.evaluate(() => ex.target.ra), typed, 1e-6));
+  });
+  if (p.errors.length) await check("P1 no script errors", async () => assert(false, p.errors.join(" | ")));
+  await close(p);
+
+  for (const [label, act] of [
+    ["Enter on the slider", async (q) => { await q.focus("#goSlide"); await q.keyboard.press("Enter"); }],
+    ["Space on the slider", async (q) => { await q.focus("#goSlide"); await q.keyboard.press(" "); }],
+    ["Enter in the Dec field", async (q) => { await q.press("#dec", "Enter"); }],
+  ]) {
+    const q = await open(); await previewReady(q);
+    await check(`P1 keyboard search: ${label}`, async () => { await act(q); await q.waitForTimeout(200); assert(await q.isVisible("#explore")); });
+    await close(q);
+  }
+
+  const q = await open(); await previewReady(q);
+  await check("P1 presets: five targets; each fills the target, 10′ and D3, and searches", async () => {
+    const names = await q.locator(".pr").allTextContents();
+    assert(names.join() === "WISE 0855,Barnard's Star,Epsilon Indi B,RW Aurigae,R Draconis", names.join());
+    await q.click('.pr:has-text("Epsilon Indi B")');
+    assert(await q.isVisible("#explore"));
+    const s = await q.evaluate(() => ({ ra: ex.target.ra, dec: ex.target.dec, h: ex.h, band: ex.band }));
+    assert(near(s.ra, 331.096669, 1e-6) && near(s.dec, -56.800649, 1e-6) && s.h === 600 && s.band === "SPHEREx-D3", JSON.stringify(s));
+  });
+  await close(q);
+}
+
+// ================================================================== page 2: explore
+async function page2() {
+  const p = await open(BARNARD);
+  await check("P2 a link with #ra=…&dec=… opens page 2 directly and shows loading", async () => {
+    assert(await p.isVisible("#explore"));
+    await p.waitForFunction(() => !document.getElementById("exLoading").hidden || ex.finished, null, { timeout: 30000 });
+  });
+  await exploreReady(p);
+
+  await check("P2 date strip: one button per image, oldest first, current highlighted", async () => {
+    const n = await p.evaluate(() => ex.frames.length);
+    assert(n >= 10 && (await p.locator(".fr").count()) === n, "strip " + n);
+    const mjds = await p.evaluate(() => ex.frames.map((f) => f.mjd));
+    assert(mjds.every((m, i) => !i || m >= mjds[i - 1]), "not in time order");
+    assert((await p.locator('.fr[aria-current="true"]').count()) === 1);
+  });
+  await check("P2 picture drawn; label shows date, wavelength and band; counter 1/N", async () => {
+    assert((await litPixels(p, "#exSky canvas")) > 500);
+    assert(/^\d{1,2} \w{3} 20\d\d · \d\d:\d\d UTC$/.test(await p.textContent("#shownDate")));
+    assert(/^λ [12]\.\d{3} µm · D3 · 6\.15″\/px$/.test(await p.textContent("#chanShort")));
+    assert(/^1\/\d+$/.test(await p.textContent("#frameNo")));
+  });
+  await check("P2 credit links to the original FITS file at IRSA", async () => {
+    const url = await newTab(p, () => p.click("#exCredit a"));
+    assert(url && /\.fits$/.test(url), String(url));
+    assert(await p.isHidden("#pop"), "the link click also picked a position");
+  });
+  await check("P2 red dots mark exactly the images with quality flags at the target", async () => {
+    const flagged = await p.evaluate(() => ex.frames.filter((f) => f.cut && f.cut.quality.length).length);
+    assert((await p.locator(".fr .dotf:not([hidden])").count()) === flagged);
+  });
+  await check("P2 header has only Back; control bar has counter, BLINK and GAIA", async () => {
+    assert((await p.locator(".extop").innerText()).trim() === "Back");
+    assert((await p.locator(".cleft button").allTextContents()).join() === "BLINK,GAIA");
+    assert((await p.locator("#regionInfo, #flagChip, #diffBtn, #fsBtn, #exZoom [data-zoom=reset]").count()) === 0);
+  });
+  await check("P2 clicking a date shows that image", async () => {
+    await p.locator(".fr").nth(3).click();
+    assert((await p.textContent("#frameNo")).startsWith("4/"));
+    assert((await p.locator(".fr").nth(3).getAttribute("aria-current")) === "true");
+  });
+  await check("P2 Prev / Next step; messages at the first and last image", async () => {
+    await p.click("#next"); assert((await p.textContent("#frameNo")).startsWith("5/"));
+    await p.click("#prev"); assert((await p.textContent("#frameNo")).startsWith("4/"));
+    // At the ends Prev / Next are marked unavailable (aria-disabled, drawn faded) but still answer
+    // a click with a message, so click them as a user would (force skips Playwright's check).
+    await p.locator(".fr").first().click();
+    assert((await p.getAttribute("#prev", "aria-disabled")) === "true");
+    await p.click("#prev", { force: true });
+    assert(/first observation/.test(await p.textContent("#toast")));
+    await p.locator(".fr").last().click();
+    assert((await p.getAttribute("#next", "aria-disabled")) === "true");
+    await p.click("#next", { force: true });
+    assert(/last observation/.test(await p.textContent("#toast")));
+  });
+  await check("P2 Play runs at the chosen speed and stops with a message at the end", async () => {
+    await p.locator(".fr").first().click();
+    await p.selectOption("#speedSel", "5");                       // 3.0x = 167 ms per frame
+    assert((await p.inputValue("#speedSel")) === "5");
+    await p.click("#play"); assert((await p.getAttribute("#play", "aria-pressed")) === "true");
+    await p.waitForTimeout(1100);
+    const k = await p.evaluate(() => ex.current);
+    assert(k >= 4 && k <= 9, "advanced " + k + " frames in 1.1 s at 3x");
+    await p.waitForFunction(() => !ex.playing, null, { timeout: 60000 });
+    assert(/Reached the last observation/.test(await p.textContent("#toast")));
+    await p.click("#play"); await p.waitForTimeout(100);
+    assert((await p.evaluate(() => ex.current)) <= 1, "Play at the end should start again");
+    await p.click("#pause"); assert((await p.getAttribute("#play", "aria-pressed")) === "false");
+  });
+  await check("P2 speed + / − step through 0.25x … 3.0x and go into the link", async () => {
+    await p.click("#slower"); assert((await p.inputValue("#speedSel")) === "4");
+    for (let i = 0; i < 6; i++) await p.click("#slower");
+    assert((await p.inputValue("#speedSel")) === "0");
+    for (let i = 0; i < 2; i++) await p.click("#faster");
+    assert((await p.inputValue("#speedSel")) === "2" && /speed=1(&|$)/.test(p.url()));
+  });
+  await check("P2 keys: → / ← step, Space plays and pauses", async () => {
+    await p.locator(".fr").nth(2).click(); await p.locator("body").click({ position: { x: 5, y: 5 } });
+    await p.keyboard.press("ArrowRight"); assert((await p.textContent("#frameNo")).startsWith("4/"));
+    await p.keyboard.press("ArrowLeft"); assert((await p.textContent("#frameNo")).startsWith("3/"));
+    await p.keyboard.press(" "); assert(await p.evaluate(() => ex.playing));
+    await p.keyboard.press(" "); assert(!(await p.evaluate(() => ex.playing)));
+  });
+  await check("P2 BLINK alternates with the previous image and labels it", async () => {
+    await p.locator(".fr").nth(5).click();
+    await p.click("#blinkBtn"); assert((await p.getAttribute("#blinkBtn", "aria-pressed")) === "true");
+    assert(/^BLINK · .+ ↔ .+ · NOW /.test(await p.textContent("#modeLabel")));
+    const seen = new Set(); for (let i = 0; i < 10; i++) { seen.add(await p.textContent("#frameNo")); await p.waitForTimeout(120); }
+    assert(seen.has("5/" + (await p.evaluate(() => ex.frames.length))) && seen.size === 2, [...seen].join());
+    await p.click("#blinkBtn"); assert(await p.isHidden("#modeLabel"));
+  });
+  await check("P2 zoom in / out on the image", async () => {
+    await p.click('#exZoom [data-zoom="in"]'); assert((await p.evaluate(() => exView.z)) === 1.5);
+    await p.click('#exZoom [data-zoom="out"]'); assert((await p.evaluate(() => exView.z)) === 1);
+  });
+
+  // ---- GAIA
+  await check("P2 GAIA: rings drawn, label counts stars, link remembers it", async () => {
+    await p.click("#gaiaBtn");
+    await p.waitForFunction(() => /stars/.test(document.getElementById("gaiaLabel").textContent), null, { timeout: 60000 });
+    assert(/^GAIA DR3 · G < 19 · \d+ stars · at .+ · arrows: 10-yr motion$/.test(await p.textContent("#gaiaLabel")));
+    const blue = await p.$eval("#gaiaCanvas", (c) => { const d = c.getContext("2d").getImageData(0, 0, c.width, c.height).data; let n = 0;
+      for (let i = 0; i < d.length; i += 4) if (d[i + 2] > 200 && d[i] < 120 && d[i + 3] > 0) n++; return n; });
+    assert(blue > 200, "no rings drawn");
+    assert(/gaia=1/.test(p.url()));
+  });
+  await check("P2 GAIA: Barnard's Star's ring moves north with the date (proper motion)", async () => {
+    const pos = () => p.evaluate(() => { const st = gaia.data.stars.find((s) => s[0] === "4472832130942575872");
+      const f = ex.frames[ex.current], a = gaiaAt(st, f.mjd), q = skyToPix(exView.field, a.ra, a.dec); return q.iy; });
+    await p.locator(".fr").first().click(); const y0 = await pos();
+    await p.locator(".fr").last().click(); const y1 = await pos();
+    assert(y0 - y1 > 1.3 && y0 - y1 < 2.1, `moved ${(y0 - y1).toFixed(2)} px north (expect ~1.7)`);
+  });
+  await check("P2 About pop-up on Barnard's Star: SPHEREx values and the Gaia match", async () => {
+    const pt = await p.evaluate(() => { const st = gaia.data.stars.find((s) => s[0] === "4472832130942575872"), f = ex.frames[ex.current];
+      const a = gaiaAt(st, f.mjd), q = skyToPix(exView.field, a.ra, a.dec), s = exView.toScreen(q.ix, q.iy), r = exView.rect(); return { x: r.left + s.x, y: r.top + s.y }; });
+    await p.mouse.click(pt.x, pt.y);
+    const t = await p.locator("#popRows").innerText();
+    for (const k of ["RA", "DEC", "BRIGHTNESS", "OBSERVED", "WAVELENGTH", "BAND", "FROM TARGET", "SOURCE FILE", "GAIA DR3 SOURCE", "PARALLAX", "PROPER MOTION"])
+      assert(t.includes(k), "missing row " + k);
+    assert(t.includes("4472832130942575872") && /546\.98 ± 0\.04 mas/.test(t) && /1\.8 pc/.test(t), "Gaia values");
+    assert(await p.isVisible(".selring"));
+  });
+  await check("P2 About pop-up stays inside the image area; its FITS link opens", async () => {
+    const pop = await p.locator("#pop").boundingBox(), sky = await p.locator("#exSky").boundingBox();
+    assert(pop.y >= sky.y - 1 && pop.y + pop.height <= sky.y + sky.height + 1 && pop.x >= sky.x - 1 && pop.x + pop.width <= sky.x + sky.width + 1);
+    const url = await newTab(p, () => p.click("#popRows a")); assert(url && /\.fits$/.test(url));
+    assert(await p.isVisible("#pop"), "pop-up closed by its own link");
+  });
+  await check("P2 About pop-up: empty sky says there is no Gaia star; × and Esc close it", async () => {
+    await p.click("#popClose"); assert(await p.isHidden("#pop"));
+    const sky = await p.locator("#exSky").boundingBox();
+    const spot = await p.evaluate(() => {   // a point at least 15″ from every Gaia star
+      const f = ex.frames[ex.current], r = exView.rect();
+      for (let y = 60; y < r.height - 60; y += 9) for (let x = 60; x < r.width - 60; x += 9) {
+        const q = exView.toImage(x, y), c = pixToSky(exView.field, q.ix, q.iy), cd = Math.cos(c.dec * Math.PI / 180);
+        if (gaia.data.stars.every((s) => { const a = gaiaAt(s, f.mjd); return Math.hypot((a.ra - c.ra) * cd, a.dec - c.dec) * 3600 > 15; })) return { x, y };
+      } return null; });
+    assert(spot, "no empty spot found");
+    await p.mouse.click(sky.x + spot.x, sky.y + spot.y);
+    assert(/No Gaia DR3 star brighter than G 19 within 6\.2″/.test(await p.textContent("#popRows")));
+    await p.keyboard.press("Escape"); assert(await p.isHidden("#pop"));
+  });
+  await check("P2 GAIA off hides the rings and its label", async () => {
+    await p.click("#gaiaBtn"); assert(await p.isHidden("#gaiaLabel") && !/gaia=1/.test(p.url()));
+  });
+  await check("P2 Back returns to page 1 with the searched position selected", async () => {
+    await p.click("#back"); await previewReady(p);
+    assert(await p.isVisible("#pick") && (await p.inputValue("#ra")) === "269.44626");
+    assert((await p.textContent("#pvName")) === "Barnard's Star");
+    assert(!/ra=/.test(new URL(p.url()).hash), "hash kept after Back");
+  });
+  if (p.errors.length) await check("P2 no script errors", async () => assert(false, p.errors.join(" | ")));
+  await close(p);
+
+  const q = await open("#ra=269.446259&dec=4.768324&size=240&band=SPHEREx-D5&speed=250&gaia=1");
+  await check("URL: band, size, old millisecond speed and gaia=1 are restored", async () => {
+    await q.waitForFunction(() => ex.frames.length, null, { timeout: 120000 });
+    const s = await q.evaluate(() => ({ band: ex.band, h: ex.h, speed: ex.speedIdx, gaia: gaia.on }));
+    assert(s.band === "SPHEREx-D5" && s.h === 240 && s.speed === 4 && s.gaia === true, JSON.stringify(s));   // 250 ms = 2.0x
+  });
+  await close(q);
+}
+
+// ================================================================== failures (simulated)
+async function failures() {
+  const routeJSON = (pattern, status, body) => async (page) => page.route(pattern, (r) => r.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) }));
+
+  let p = await open(BARNARD, { setup: routeJSON("**/api/frames*", 502, { error: "IRSA SIA query failed: busy" }) });
+  await check("FAIL IRSA search down: page 2 explains and offers Back", async () => {
+    await p.waitForSelector("#noObs:not([hidden])", { timeout: 20000 });
+    assert(/Could not search IRSA/.test(await p.textContent("#noObsTitle")));
+  });
+  await close(p);
+
+  p = await open(BARNARD, { setup: routeJSON("**/api/frames*", 200, { frames: [] }) });
+  await check("FAIL no observations: page 2 says none were found", async () => {
+    await p.waitForSelector("#noObs:not([hidden])", { timeout: 20000 });
+    assert(/No SPHEREx observations found/.test(await p.textContent("#noObsTitle")));
+    await p.keyboard.press("ArrowRight"); assert(await p.isHidden("#toast"), "no step message with no frames");
+  });
+  await close(p);
+
+  p = await open("", { setup: routeJSON("**/api/frames*", 502, { error: "busy" }) });
+  await check("FAIL preview can't load: page 1 explains, the rest still works", async () => {
+    await p.waitForFunction(() => /Could not load/.test(document.getElementById("pvLoadingText").textContent), null, { timeout: 20000 });
+    assert((await p.locator(".pr").count()) === 5);
+  });
+  await close(p);
+
+  // Frames 2 and 3 fail (both download tries): faded dates, a message, and playback skips them.
+  p = await open(BARNARD, { setup: async (page) => {
+    let urls = null;
+    await page.route("**/api/frames*", async (r) => { const res = await r.fetch(); const j = await res.json(); urls = new Set(j.frames.slice(1, 3).map((f) => f.url)); await r.fulfill({ response: res, json: j }); });
+    await page.route("**/api/cutouts*", async (r) => {
+      const asked = JSON.parse(r.request().postData()).urls, res = await r.fetch();
+      const body = (await res.text()).split("\n").filter(Boolean).map((l) => { const m = JSON.parse(l); return urls.has(asked[m.i]) ? JSON.stringify({ i: m.i, error: "simulated" }) : l; }).join("\n") + "\n";
+      await r.fulfill({ status: 200, contentType: "application/x-ndjson", body });
+    });
+  } });
+  await exploreReady(p);
+  await check("FAIL failed images: faded dates, a message, and Next / BLINK skip them", async () => {
+    assert((await p.locator(".fr.bad").count()) === 2, "faded dates");
+    await p.locator(".fr").nth(1).click(); assert(/could not be loaded/.test(await p.textContent("#toast")));
+    await p.locator(".fr").first().click(); await p.click("#next");
+    assert((await p.textContent("#frameNo")).startsWith("4/"), "Next should skip 2 and 3");
+    await p.click("#blinkBtn"); assert(/1 SKIPPED|2 NOT LOADED, SKIPPED/.test(await p.textContent("#modeLabel")), await p.textContent("#modeLabel"));
+    await p.click("#blinkBtn");
+  });
+  await close(p);
+
+  p = await open(BARNARD + "&gaia=1", { setup: routeJSON("**/api/gaia*", 502, { error: "Gaia query at MAST failed: busy" }) });
+  await exploreReady(p);
+  await check("FAIL Gaia unavailable: the label and the pop-up say so", async () => {
+    await p.waitForFunction(() => /unavailable/.test(document.getElementById("gaiaLabel").textContent), null, { timeout: 20000 });
+    const sky = await p.locator("#exSky").boundingBox(); await p.mouse.click(sky.x + sky.width / 2, sky.y + sky.height / 2);
+    assert(/Gaia unavailable/.test(await p.textContent("#popRows")));
+  });
+  await close(p);
+}
+
+// ================================================================== layout
+async function layout() {
+  for (const [w, h] of [[1920, 1080], [1366, 657], [1024, 500]]) {
+    const p = await open("", { viewport: { width: w, height: h } });
+    await check(`LAYOUT ${w}×${h}: the sidebar fills the height with no scrolling`, async () => {
+      const m = await p.evaluate(() => { const s = document.querySelector(".side"), r = s.getBoundingClientRect(), last = document.querySelector(".presetbox").getBoundingClientRect();
+        return { scroll: s.scrollHeight > s.clientHeight + 1, toBottom: innerHeight - 10 - r.bottom, below: r.bottom - last.bottom }; });
+      assert(!m.scroll && near(m.toBottom, 0, 1) && m.below < 25, JSON.stringify(m));
+    });
+    await close(p);
+  }
+  const p = await open("", { ...devices["iPhone 13"] });
+  await previewReady(p);
+  await check("LAYOUT phone: no sideways scrolling on page 1; slide to search works by touch-size drag", async () => {
+    assert((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0);
+    await dragSlider(p, 1); assert(await p.isVisible("#explore"));
+  });
+  await exploreReady(p);
+  await check("LAYOUT phone: no sideways scrolling on page 2", async () => {
+    assert((await p.evaluate(() => document.documentElement.scrollWidth - innerWidth)) <= 0);
+  });
+  await close(p);
+}
+
+// ================================================================== run
+browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
+const t0 = Date.now();
+for (const part of [page1, page2, failures, layout]) {
+  try { await part(); } catch (e) { results.push([false, `${part.name} crashed: ${e.message}`]); console.log("FAIL", part.name, "crashed:", e.message); }
+}
+await browser.close();
+const failed = results.filter((r) => !r[0]);
+console.log(`\n${results.length - failed.length} passed, ${failed.length} failed in ${((Date.now() - t0) / 1000).toFixed(0)} s`);
+for (const [, name] of failed) console.log("  failed:", name);
+process.exit(failed.length);

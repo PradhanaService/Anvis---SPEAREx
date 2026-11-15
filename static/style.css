@@ -1,3 +1,4 @@
+/* Anvis styles: light page, dark image areas, red accent (#E03C31); Public Sans + DM Mono. */
 * { box-sizing: border-box; }
 html, body { margin: 0; background: #fff; }
 body { color: #0b0b0b; font: 14px/1.4 'Public Sans', system-ui, sans-serif; }
@@ -12,7 +13,7 @@ button, input, select { font: inherit; }
 
 .app { height: 100vh; height: 100dvh; min-height: 480px; padding: 10px; overflow: hidden; display: flex; gap: 10px; }
 
-/* ---------------- 01 PICK ---------------- */
+/* ---------------- page 1: pick (sidebar) ---------------- */
 /* The sidebar fills the window height: sizes scale with the window (vh, within limits) and any
    remainder is shared out between the form fields, so there is no empty block. */
 .side { flex: 0 0 260px; border: 1px solid #0b0b0b; padding: clamp(8px, 1.8vh, 20px) 12px; display: flex; flex-direction: column;
@@ -66,7 +67,7 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .tb:hover { background: #f0f0f0; }
 .zpct { margin-left: 6px; font-family: 'DM Mono', monospace; font-size: 12px; color: #5c5c5c; }
 
-/* ---------------- sky viewer ---------------- */
+/* ---------------- sky viewer (both pages): image, overlays, loading ---------------- */
 .sky { position: relative; flex: 1 1 auto; min-height: 0; border: 1px solid #0b0b0b; overflow: hidden;
   background: #050505; color: #fff; cursor: crosshair; user-select: none; touch-action: none; }
 .sky.dragging { cursor: grabbing; }
@@ -108,7 +109,7 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .noobs strong { font-size: 16px; }
 .noobs span { font-size: 13px; color: #d0d0d0; max-width: 60ch; }
 
-/* ---------------- 02 EXPLORE ---------------- */
+/* ---------------- page 2: explore (viewer, About pop-up, control bar, date strip) ---------------- */
 .app.ex { flex-direction: column; gap: 6px; }
 .extop { flex: none; height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; }
 .bk { display: inline-flex; align-items: center; gap: 8px; height: 34px; padding: 0 6px 0 2px; font-size: 16px; font-weight: 700;

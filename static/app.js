@@ -2,16 +2,22 @@
 
 // ======================================================================
 // Anvis – SPHEREx Sky Explorer (frontend).
-// 01 PICK: pick a position on a real SPHEREx image (or type it, or use a preset).
-// 02 EXPLORE: every SPHEREx image of that position in time order, with blink and difference.
-// All pixels come from IRSA through this app's backend (/api/frames, /api/cutout, /api/cutouts).
+// Page 1 (#pick):    pick a position on a real SPHEREx image, type it, or use a preset.
+// Page 2 (#explore): every SPHEREx image of that position in time order: playback, BLINK,
+//                    a Gaia DR3 overlay and an "About" pop-up for any clicked point.
+// All pixels come from IRSA through this app's backend (/api/frames, /api/cutout, /api/cutouts);
+// Gaia stars come from MAST through /api/gaia.
+//
+// File layout: constants · coordinates · picture rendering · SkyView (zoom/pan/click viewer)
+// · API helpers · presets · page 1 · page 2 (loading, date strip, picture, pop-up, playback,
+// BLINK, GAIA, keys, Back) · shareable URL · start-up.
 // ======================================================================
 
 const MAX_FRAMES = 300;          // if more images exist, show this many spread evenly in time
 const MAX_WIDTH = 1800;           // arcsec: widest field the backend serves (30')
 const PREVIEW_W = 1800;          // 01 PICK preview width, arcsec (30'); height follows the viewer's shape
 const BASE_FRAME_MS = 500;       // 1.0x playback speed
-const BLINK_MS = 450;
+const BLINK_MS = 450;            // BLINK alternates frames this often
 const DISPLAY = { minb: 1, maxb: 99.5, invert: false };   // brightness limits (percentiles of each frame)
 const BANDS = {
   "SPHEREx-D1": "0.75–1.09 µm", "SPHEREx-D2": "1.10–1.62 µm", "SPHEREx-D3": "1.63–2.41 µm",
@@ -22,6 +28,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
 // ---------------------------------------------------------------- coordinates
+// RA is typed as degrees or as hours ("14 03 12.5", "14h03m12.5s"); Dec as degrees or "±dd mm ss".
 function nums(s) { return (String(s).match(/\d+(?:\.\d+)?/g) || []).map(Number); }
 function parseRA(s) {
   s = String(s).trim(); if (!s) return null;
@@ -45,8 +52,7 @@ function fmtDec(d) {
   const t = Math.round(Math.abs(d) * 3600);
   return `${d < 0 ? "−" : "+"}${p2(Math.floor(t / 3600))}° ${p2(Math.floor((t % 3600) / 60))}′ ${p2(t % 60)}″`;
 }
-const degRA = (ra) => ra.toFixed(5) + "°";
-const degDec = (d) => (d >= 0 ? "+" : "") + d.toFixed(5) + "°";
+// Arcseconds as "4′" (60″ or more) or "30″".
 const fmtArc = (a) => a >= 60 ? `${+(a / 60).toFixed(1)}′` : `${Math.round(a)}″`;
 
 // Field pixel (continuous, 0..nx / 0..ny, north up, east left) <-> sky, for a north-up
@@ -134,6 +140,11 @@ function drawFrame(w, h, data, lo, hi, invert, OW, OH) {
 }
 
 // ---------------------------------------------------------------- sky viewer (zoom, pan, hover, click)
+// One SkyView per page. It draws a frame (from setImage) into the box's canvas and handles zoom
+// (buttons in zoomScope, mouse wheel), drag-to-pan, hover and click-to-pick.
+// Coordinates: "image" pixels (ix, iy) run 0..nx / 0..ny over the frame, north up; "screen"
+// pixels are CSS px in the box. screen = t + image * k, where k = base fit scale × zoom.
+// Callbacks: onHover({ix, iy, x, y} | null), onPick({ix, iy}), onChange() after every redraw.
 class SkyView {
   constructor(box, zoomScope, { onHover, onPick, onChange }) {
     this.box = box; this.canvas = box.querySelector("canvas"); this.ctx = this.canvas.getContext("2d");
@@ -327,7 +338,9 @@ function exploreWidth(h) {
 // ======================================================================
 // 01 PICK
 // ======================================================================
-const pk = { center: null, pick: null, band: "", loadId: 0, shownFrame: null };
+// pk: page-1 state. center = middle of the preview image, pick = selected position,
+// band = band of the preview shown, loadId = bumps on every preview load (late replies are dropped).
+const pk = { center: null, pick: null, band: "", loadId: 0 };
 const pvBox = $("pvSky");
 const pvView = new SkyView(pvBox, $("pvZoom"), {
   onHover: (h) => pvHover(h),
@@ -341,6 +354,7 @@ function pvLoading(text, spinner = true) {
   pvBox.querySelector(".spin").hidden = !spinner;
 }
 
+// Show the most recent SPHEREx image around `center` (30′ wide; height follows the viewer's shape).
 async function loadPreview(center) {
   const id = ++pk.loadId, band = $("band").value;
   pk.center = { ...center }; pk.band = band;
@@ -357,7 +371,6 @@ async function loadPreview(center) {
     const cut = await getJSON(cutoutURL(f, center.ra, center.dec, h, w));
     if (id !== pk.loadId) return;
     pvView.setImage(cut, center.ra, center.dec, DISPLAY);
-    pk.shownFrame = f;
     pvLoading("");
     $("pvCredit").innerHTML = `SPHEREx ${esc(bandShort(band))} · ${esc(f.date.slice(0, 10))} · ` +
       `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">image file at IRSA</a>`;
@@ -369,6 +382,7 @@ async function loadPreview(center) {
   }
 }
 
+// Image label (preset name or "Custom field") and the highlighted preset button.
 function updatePickLabel() {
   const p = presetAt(pk.pick);
   $("pvName").textContent = p ? p.name : "Custom field";
@@ -379,6 +393,7 @@ function updatePickLabel() {
   });
 }
 
+// Dashed crosshair and RA/Dec read-out following the mouse.
 function pvHover(h) {
   const show = !!h;
   pvBox.querySelector(".cross-h").hidden = !show;
@@ -410,6 +425,7 @@ function placePickMarks() {
   reg.querySelector(".rtag").textContent = `${fmtArc(h)} × ${fmtArc(w)} FIELD`;
 }
 
+// Select a position (from a click or typing); optionally write it into the RA/Dec fields.
 function setPick(c, fillInputs) {
   pk.pick = c;
   if (fillInputs) {
@@ -425,6 +441,7 @@ function updateHints() {
   $("decHint").textContent = dec !== null ? `= ${fmtDec(dec)}` : "Degrees, or ±dd mm ss";
 }
 
+// RA/Dec from the fields, or null. Shows an error for bad input (and for empty input if report).
 function typedPosition(report) {
   const rs = $("ra").value, ds = $("dec").value, ra = parseRA(rs), dec = parseDec(ds);
   let err = "";
@@ -533,12 +550,20 @@ PRESETS.forEach((t) => {
 // ======================================================================
 // 02 EXPLORE
 // ======================================================================
+// ex: page-2 state.
+//   target {ra, dec}, band, h/w = field height/width (arcsec)
+//   frames = one entry per SPHEREx image, oldest first ({date, mjd, url, ..., cut, failed});
+//            cut = the processed frame from /api/cutouts once it has arrived
+//   current = index shown; timer/playing/speedIdx = playback; blink* = BLINK state
+//   pick = clicked field pixel {ix, iy} for the About pop-up
+//   searchId bumps on every search, so replies for an older search are ignored
+//   done/failed = cutouts received / failed so far; finished = loading is over
 const ex = {
-  target: null, name: "", band: "", h: 0, w: 0,
+  target: null, band: "", h: 0, w: 0,
   frames: [], current: 0, timer: null, playing: false, speedIdx: 2,
   blink: false, blinkAlt: false, blinkTimer: null,
-  pick: null, popAt: null,          // clicked field pixel, and where the click was on screen
-  searchId: 0, listTotal: 0, done: 0, failed: 0, finished: false,
+  pick: null,
+  searchId: 0, done: 0, failed: 0, finished: false,
 };
 const exBox = $("exSky");
 const exView = new SkyView(exBox, $("exZoom"), {
@@ -546,7 +571,9 @@ const exView = new SkyView(exBox, $("exZoom"), {
   onChange: () => placeExMarks(),
 });
 
+// Loading overlay over the explore image (hidden when text is empty).
 function exLoading(text) { $("exLoading").hidden = !text; if (text) $("exLoadingText").textContent = text; }
+// Short message at the bottom of the explore image, hidden after 2.2 s.
 let toastTimer = null;
 function toast(msg) {
   clearTimeout(toastTimer);
@@ -554,14 +581,15 @@ function toast(msg) {
   toastTimer = setTimeout(() => { $("toast").hidden = true; }, 2200);
 }
 
+// Switch to page 2 and load every SPHEREx image of the field around c, in time order.
 async function openExplore(c) {
   stop(); stopBlink();
   $("pick").hidden = true; $("explore").hidden = false;
   window.scrollTo(0, 0);
 
-  const id = ++ex.searchId, p = presetAt(c);
-  Object.assign(ex, { target: c, name: p ? p.name : "Custom field", band: $("band").value, h: heightArcsec(),
-                      frames: [], current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
+  const id = ++ex.searchId;
+  Object.assign(ex, { target: c, band: $("band").value, h: heightArcsec(),
+                      frames: [], current: 0, pick: null, done: 0, failed: 0, finished: false });
   ex.w = exploreWidth(ex.h);
   loadGaia(c);
   $("strip").innerHTML = ""; $("exCredit").textContent = "";
@@ -582,7 +610,6 @@ async function openExplore(c) {
   if (id !== ex.searchId) return;
 
   let all = list.frames;
-  ex.listTotal = all.length;
   if (!all.length) {
     exLoading("");
     $("noObsTitle").textContent = "No SPHEREx observations found";
@@ -630,7 +657,7 @@ async function openExplore(c) {
   }
 }
 
-// ---- date strip
+// ---- date strip: one button per image; red dot = SPHEREx quality flags at the target
 const qualityText = (f) => f.cut && f.cut.quality && f.cut.quality.length ? f.cut.quality.map((q) => q.name).join(", ") : "";
 function buildStrip() {
   const strip = $("strip"); strip.innerHTML = "";
@@ -665,8 +692,8 @@ function updateStrip() {
   }
 }
 
-// ---- the picture: normal, blink, or difference
-// BLINK and DIFF compare with the nearest earlier observation that loaded (-1 if none).
+// ---- the picture (the current frame, or during BLINK the frame it is compared with)
+// BLINK compares with the nearest earlier observation that loaded (-1 if none).
 function refIndex() {
   for (let i = ex.current - 1; i >= 0; i--) if (ex.frames[i].cut) return i;
   return -1;
@@ -675,6 +702,7 @@ function shownIndex() {
   const r = refIndex();
   return ex.blink && ex.blinkAlt && r >= 0 ? r : ex.current;
 }
+// Draw the frame to show, and refresh its label, credit link, bar, strip, pop-up and marks.
 function showFrame() {
   const k = ex.current, f = ex.frames[k]; if (!f) return;
   const di = shownIndex(), shown = ex.frames[di], d = shortDate(shown.date);
@@ -694,6 +722,7 @@ function showFrame() {
   renderMode(); renderBar(); updateStrip(); renderPop(); placeExMarks();
 }
 
+// The label at the top of the image while BLINK is on.
 function renderMode() {
   const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
   lbl.hidden = !ex.blink;
@@ -707,12 +736,12 @@ function renderMode() {
   }
 }
 
+// Overlays that follow the image: region outline, selection ring, pop-up position, Gaia rings.
 function placeExMarks() {
   const edge = exBox.querySelector(".frameedge"), ring = exBox.querySelector(".selring");
   if (!exView.field || !exView.hasImage) { edge.hidden = ring.hidden = true; return; }
   const a = exView.toScreen(0, 0), b = exView.toScreen(exView.field.nx, exView.field.ny);
   edge.hidden = a.y < 24;   // only when there is room above the image for the tag
-  ring.hidden = true;
   Object.assign(edge.style, { left: a.x + "px", top: a.y + "px", width: (b.x - a.x) + "px", height: (b.y - a.y) + "px" });
   $("regionTag").textContent = `YOUR REGION · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
   if (ex.pick) exView.place(ring, ex.pick.ix, ex.pick.iy); else ring.hidden = true;
@@ -747,6 +776,7 @@ function renderPop() {
   pop.hidden = false;
   positionPop();
 }
+// Place the pop-up beside the clicked point, inside the image area.
 function positionPop() {
   const pop = $("pop"), r = exView.rect();
   // The pop-up is capped at the image area's height (it scrolls inside if taller), so it always fits.
@@ -765,6 +795,7 @@ exBox.querySelectorAll(".zb").forEach((b) => b.addEventListener("pointerdown", (
 const SPEED_LIST = [0.25, 0.5, 1, 1.5, 2, 3];
 const speedLabel = (s) => s.toFixed(s < 1 ? 2 : 1) + "x";
 function frameMs() { return BASE_FRAME_MS / SPEED_LIST[ex.speedIdx]; }
+// Index of the next frame (dir = +1 / -1) that has not failed, or -1 at the end.
 function nextLoadable(from, dir) {
   for (let i = from + dir; i >= 0 && i < ex.frames.length; i += dir) if (!ex.frames[i].failed) return i;
   return -1;
@@ -792,10 +823,12 @@ function play() {
 }
 function stop() { ex.playing = false; clearTimeout(ex.timer); renderBar(); }
 function stepFrame(dir) {
+  if (!ex.frames.length) return;
   const n = nextLoadable(ex.current, dir);
   if (n < 0) { toast(dir < 0 ? "This is the first observation" : "This is the last observation"); return; }
   go(n);
 }
+// Frame counter and the pressed / disabled state of the control-bar buttons.
 function renderBar() {
   const n = ex.frames.length, k = ex.current;
   $("frameNo").textContent = n ? `${shownIndex() + 1}/${n}` : "0/0";
@@ -816,7 +849,7 @@ $("next").addEventListener("click", () => { stop(); stepFrame(1); });
 $("play").addEventListener("click", play);
 $("pause").addEventListener("click", stop);
 
-// ---- blink & difference
+// ---- BLINK: alternate the current frame with the previous loaded one
 function stopBlink() { clearInterval(ex.blinkTimer); ex.blink = false; ex.blinkAlt = false; }
 $("blinkBtn").addEventListener("click", () => {
   if (ex.blink) { stopBlink(); showFrame(); return; }
@@ -833,6 +866,7 @@ const MJD_J2016 = 57388.5;   // Julian epoch 2016.0
 const GAIA_COLOR = "#38bdf8";
 const gaia = { on: false, data: null, error: null, loading: false, id: 0 };
 
+// Fetch Gaia stars for the field once per search (in the background while the images load).
 async function loadGaia(c) {
   const id = ++gaia.id;
   Object.assign(gaia, { data: null, error: null, loading: true });
@@ -854,6 +888,7 @@ function gaiaAt(st, mjd) {
   const yrs = (mjd - MJD_J2016) / 365.25, dec = st[2] + ((st[4] || 0) * yrs) / 3.6e6;
   return { ra: st[1] + ((st[3] || 0) * yrs) / 3.6e6 / Math.cos((st[2] * Math.PI) / 180), dec };
 }
+// Draw the Gaia rings (and motion arrows) on their own canvas above the image.
 function drawGaia() {
   const cv = $("gaiaCanvas"), lbl = $("gaiaLabel"), r = exView.rect(), dpr = Math.min(2, window.devicePixelRatio || 1);
   const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
@@ -930,6 +965,7 @@ function gaiaPopRows(c, mjd) {
 }
 $("gaiaBtn").addEventListener("click", () => { gaia.on = !gaia.on; drawGaia(); if (ex.target) writeHash(ex.target); });
 
+// Keys on page 2: ← / → step, Space plays or pauses, Esc closes the pop-up.
 document.addEventListener("keydown", (e) => {
   if ($("explore").hidden) return;
   if (e.key === "Escape") { if (!$("pop").hidden) $("popClose").click(); return; }
@@ -940,6 +976,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === " ") { e.preventDefault(); ex.playing ? stop() : play(); }
 });
 
+// Back to page 1, with the searched position selected (the preview reloads if needed).
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
   stop(); stopBlink(); ex.searchId++; gaia.id++;
@@ -987,7 +1024,7 @@ function readHash() {
 }
 
 // ======================================================================
-// Start
+// Start: a link with #ra=…&dec=… opens page 2 directly; otherwise page 1 on the start preset.
 // ======================================================================
 (function start() {
   const c = readHash();

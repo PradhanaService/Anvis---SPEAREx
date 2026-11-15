@@ -22,17 +22,17 @@ HTML/CSS/JS in `static/`.
 
 The app has two pages:
 
-1. **01 Pick** – a sidebar (RA, Dec, height in arcmin, band D1–D6, Search, five presets) next to a
-   real SPHEREx image you can pan, zoom and hover to read coordinates; click to pick a position.
-   A dashed box shows the field that Search will fetch. Presets fill the target, set height 10′
-   and band D3, and run the search.
-2. **02 Explore** – every SPHEREx image of that field in time order: a date strip, Prev / Play /
+1. **Pick** – a sidebar (RA, Dec, height in arcmin, band D1–D6, **Slide to Search**, five presets)
+   next to a real SPHEREx image you can pan, zoom and hover to read coordinates; click to pick a
+   position. A dashed box shows the field the search will fetch. Drag the red handle of
+   *Slide to Search* to the right end to search (Enter also works). Presets fill the target, set
+   height 10′ and band D3, and search straight away.
+2. **Explore** – every SPHEREx image of that field in time order: a date strip, Prev / Play /
    Pause / Next (stops at the ends), speed 0.25x–3x, BLINK (alternate with the previous
-   observation), zoom and pan,
-   ←/→/space keys (Esc closes the pop-up), and a shareable URL (`#ra=...&dec=...&size=...&band=...`).
-   Red dots on dates show SPHEREx quality flags at the target (from each
-   image's FLAGS extension). Click the image for an "About" pop-up with the position, measured
-   surface brightness (MJy/sr), wavelength and the original FITS file at IRSA.
+   observation), zoom and pan, ←/→/Space keys (Esc closes the pop-up), and a shareable URL
+   (`#ra=...&dec=...&size=...&band=...&gaia=1`). Red dots on dates show SPHEREx quality flags at
+   the target (from each image's FLAGS extension). Click the image for an "About" pop-up with the
+   position, measured surface brightness (MJy/sr), wavelength and the original FITS file at IRSA.
 
    **GAIA** overlays Gaia DR3 stars (G < 19, from MAST at STScI) on the images, each moved from
    Gaia's 2016.0 epoch to the date of the frame shown using its proper motion; stars moving
@@ -56,6 +56,52 @@ python app.py
 ```
 
 Then open http://localhost:8000/#ra=210.80227&dec=54.34895 (M101).
+
+## Project layout
+
+| Path | What it is |
+|---|---|
+| `app.py` | Flask backend: IRSA search and cutouts, frame building, caches, Gaia from MAST (endpoints listed at the top) |
+| `static/index.html` | The page: both screens (Pick, Explore) |
+| `static/style.css` | Styles |
+| `static/app.js` | Everything interactive (layout of the file listed at the top) |
+| `tests/test_backend.py` | Offline backend tests (no network) |
+| `tests/test_live.py` | Live checks against IRSA and MAST (opt-in) |
+| `tests/e2e/ui.test.mjs` | Browser test of every part of the page |
+
+## Tests
+
+Backend tests (offline, about a second):
+
+```bash
+pip install -r requirements-dev.txt
+```
+```bash
+python -m pytest -q tests
+```
+
+Live checks against IRSA and MAST (internet needed; macOS/Linux shown, on Windows PowerShell
+first run `$env:ANVIS_LIVE=1`, then the pytest command):
+
+```bash
+ANVIS_LIVE=1 python -m pytest -q tests/test_live.py
+```
+
+Browser test of every part of the page (needs Node.js; start `python app.py` first, then in
+`tests/e2e`):
+
+```bash
+npm install
+```
+```bash
+npx playwright install chromium
+```
+```bash
+npm test
+```
+
+It prints PASS / FAIL for about 50 checks (both pages, presets, slide to search, playback,
+BLINK, GAIA, the About pop-up, simulated IRSA / MAST failures, and layouts down to phone size).
 
 ## Make it public
 
