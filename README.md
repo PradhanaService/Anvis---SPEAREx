@@ -33,10 +33,6 @@ The app has two pages:
    image's FLAGS extension). Click the image for an "About" pop-up with the position, measured
    surface brightness (MJy/sr), wavelength and the original FITS file at IRSA.
 
-   **STACK** combines the exposures of each sky pass (SPHEREx revisits a spot about every six months)
-   into one per-pixel median image, for much lower noise; BLINK and DIFF then compare whole passes,
-   which makes slow proper motions (e.g. Barnard's Star) visible.
-
 This is an independent tool using NASA SPHEREx data from IRSA; it is not an official NASA website.
 
 Note: SPHEREx's wavelength varies across its detectors, so each frame samples a slightly

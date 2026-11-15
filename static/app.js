@@ -510,7 +510,6 @@ const ex = {
   blink: false, blinkAlt: false, blinkTimer: null, diff: false,
   pick: null, popAt: null,          // clicked field pixel, and where the click was on screen
   searchId: 0, listTotal: 0, done: 0, failed: 0, finished: false,
-  exposures: [], stacked: false, wantStack: false,   // STACK: ex.frames becomes one median image per sky pass
 };
 const exBox = $("exSky");
 const exView = new SkyView(exBox, $("exZoom"), {
@@ -533,8 +532,7 @@ async function openExplore(c) {
 
   const id = ++ex.searchId, p = presetAt(c);
   Object.assign(ex, { target: c, name: p ? p.name : "Custom field", band: $("band").value, h: heightArcsec(),
-                      frames: [], exposures: [], stacked: false, current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
-  $("stackBtn").disabled = true;
+                      frames: [], current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
   ex.w = exploreWidth(ex.h);
   $("strip").innerHTML = ""; $("exCredit").textContent = "";
   $("pop").hidden = true; $("noObs").hidden = true;
@@ -565,7 +563,7 @@ async function openExplore(c) {
     const step = all.length / MAX_FRAMES;
     all = Array.from({ length: MAX_FRAMES }, (_, i) => all[Math.floor(i * step)]);
   }
-  ex.frames = ex.exposures = all.map((f) => ({ ...f, cut: null, failed: false }));
+  ex.frames = all.map((f) => ({ ...f, cut: null, failed: false }));
   exLoading(`Retrieving SPHEREx observations… 0 of ${ex.frames.length}`);
   buildStrip(); renderInfo(); renderBar();
 
@@ -593,10 +591,7 @@ async function openExplore(c) {
   }
   if (id !== ex.searchId) return;
   ex.finished = true; renderInfo();
-  $("stackBtn").disabled = !ex.frames.some((f) => f.cut);
-  $("stackBtn").title = "Median-combine the exposures of each sky pass (about every 6 months)";
   if (!ex.frames[ex.current].cut) { const first = ex.frames.findIndex((f) => f.cut); if (first >= 0) go(first); }
-  if (ex.wantStack && !$("stackBtn").disabled) { ex.wantStack = false; setStacked(true); }
   if (!ex.frames.some((f) => f.cut)) {
     exLoading("");
     $("noObsTitle").textContent = "Could not load the observations";
@@ -609,9 +604,8 @@ function renderInfo() {
   const c = ex.target; if (!c) return;
   let s = `${ex.name} · ${fmtRA(c.ra)} ${fmtDec(c.dec)} · ${bandShort(ex.band)} (${BANDS[ex.band]}) · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
   if (ex.frames.length) {
-    s += ` · ${ex.listTotal} observations` + (ex.listTotal > ex.exposures.length ? ` (showing ${ex.exposures.length})` : "");
-    s += ex.finished ? (ex.failed ? ` · ${ex.failed} not loaded` : "") : ` · loading ${ex.done}/${ex.exposures.length}`;
-    if (ex.stacked) s += ` · stacked into ${ex.frames.length} sky passes`;
+    s += ` · ${ex.listTotal} observations` + (ex.listTotal > ex.frames.length ? ` (showing ${ex.frames.length})` : "");
+    s += ex.finished ? (ex.failed ? ` · ${ex.failed} not loaded` : "") : ` · loading ${ex.done}/${ex.frames.length}`;
   }
   $("regionInfo").textContent = s + " · data: NASA/IPAC IRSA · not an official NASA site";
 }
@@ -623,9 +617,7 @@ function buildStrip() {
   ex.frames.forEach((f, i) => {
     const d = shortDate(f.date), b = document.createElement("button");
     b.type = "button"; b.className = "fr";
-    b.innerHTML = f.pass
-      ? `<span class="d">${esc(f.pass.label)}</span><span class="t">${f.pass.n} exp · ${esc(f.pass.span)}<span class="dotf" hidden></span></span>`
-      : `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
+    b.innerHTML = `<span class="d">${esc(d.day)}</span><span class="t">${esc(d.year)} · ${esc(d.time)} UTC<span class="dotf" hidden></span></span>`;
     b.addEventListener("click", () => go(i));
     strip.appendChild(b);
     updateChip(i);
@@ -639,8 +631,7 @@ function updateChip(i) {
   b.classList.toggle("bad", f.failed);
   b.setAttribute("aria-current", String(i === ex.current));
   b.querySelector(".dotf").hidden = !q;
-  b.setAttribute("aria-label", f.pass ? `Sky pass ${i + 1}: ${f.pass.range}, median of ${f.pass.n} exposures`
-    : `${d.day} ${d.year}, ${d.time} UTC${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
+  b.setAttribute("aria-label", `${d.day} ${d.year}, ${d.time} UTC${q ? ", flagged: " + q : ""}${f.failed ? ", could not be loaded" : ""}`);
   b.title = q ? `Quality flags at the target: ${q}` : "";
 }
 function updateStrip() {
@@ -667,17 +658,11 @@ function shownIndex() {
 function showFrame() {
   const k = ex.current, f = ex.frames[k]; if (!f) return;
   const di = shownIndex(), shown = ex.frames[di], d = shortDate(shown.date);
-  if (shown.pass) {
-    $("shownDate").textContent = `Sky pass ${di + 1} of ${ex.frames.length} · ${shown.pass.range}`;
-    $("chanShort").textContent = `Median of ${shown.pass.n} exposures · λ ${shown.pass.wl} µm · ${bandShort(ex.band)}`;
-    $("exCredit").textContent = `Stack of ${shown.pass.n} SPHEREx exposures from IRSA · switch STACK off to see and link each one`;
-  } else {
-    $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
-    $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
-      `${bandShort(ex.band)} · 6.15″/px`;
-    $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
-      `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
-  }
+  $("shownDate").textContent = `${d.day} ${d.year} · ${d.time} UTC`;
+  $("chanShort").textContent = (shown.cut && shown.cut.wavelength_um ? `λ ${shown.cut.wavelength_um.toFixed(3)} µm · ` : "") +
+    `${bandShort(ex.band)} · 6.15″/px`;
+  $("exCredit").innerHTML = `SPHEREx ${esc(shown.collection.replace("spherex_", "").toUpperCase())} · ${esc(shown.obs_id)} · ` +
+    `<a href="${encodeURI(shown.url)}" target="_blank" rel="noopener">Original image file at IRSA (FITS)</a>`;
 
   const ri = refIndex(), prev = ex.frames[ri];
   if (ex.diff && f.cut && ri >= 0) {
@@ -702,7 +687,7 @@ function renderMode() {
   const lbl = $("modeLabel"), k = ex.current, f = ex.frames[k], ri = refIndex(), p = ex.frames[ri];
   lbl.hidden = !(ex.blink || ex.diff);
   if (!f) return;
-  const day = (x) => (x.pass ? x.pass.label.toUpperCase() : shortDate(x.date).day);
+  const day = (x) => shortDate(x.date).day;
   const skipped = ri >= 0 && ri < k - 1 ? ` · ${k - 1 - ri} NOT LOADED, SKIPPED` : "";
   if (ex.blink) {
     lbl.textContent = !f.cut ? "BLINK · THIS OBSERVATION IS NOT LOADED"
@@ -712,7 +697,7 @@ function renderMode() {
     if (!f.cut) lbl.textContent = "DIFFERENCE · THIS OBSERVATION IS NOT LOADED";
     else if (!p) lbl.textContent = "DIFFERENCE UNAVAILABLE · NO EARLIER LOADED OBSERVATION · SHOWING THIS ONE";
     else {
-      const wl = (x) => (x.pass ? x.pass.wl : x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
+      const wl = (x) => (x.cut && x.cut.wavelength_um ? x.cut.wavelength_um.toFixed(2) : "?");
       lbl.textContent = `DIFFERENCE · ${day(f)} − ${day(p)} · λ ${wl(f)} vs ${wl(p)} µm${skipped}`;
     }
   }
@@ -746,13 +731,13 @@ function renderPop() {
   const rows = [
     prow("RA", esc(fmtRA(c.ra))),
     prow("Dec", esc(fmtDec(c.dec))),
-    prow(isDiff ? "Change vs previous" : f.pass ? `Brightness (median of ${f.pass.n})` : "Brightness",
+    prow(isDiff ? "Change vs previous" : "Brightness",
       val === undefined ? "—" : val === null ? "no data" : `${isDiff && val > 0 ? "+" : ""}${val.toFixed(3)} MJy/sr`, val === null),
-    prow("Observed", esc(f.pass ? f.pass.range : `${d.day} ${d.year} · ${d.time} UTC`)),
-    prow("Wavelength", f.pass ? `${f.pass.wl} µm` : f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
+    prow("Observed", esc(`${d.day} ${d.year} · ${d.time} UTC`)),
+    prow("Wavelength", f.cut && f.cut.wavelength_um ? `${f.cut.wavelength_um.toFixed(3)} µm` : "—"),
     prow("Band", esc(`${bandShort(ex.band)} · ${BANDS[ex.band]}`)),
     prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
-    prow("Source file", f.pass ? `${f.pass.n} files (see each exposure)` : `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
+    prow("Source file", `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
   ];
   $("popRows").innerHTML = rows.join("");
   $("popNoData").hidden = val !== null;
@@ -811,11 +796,9 @@ function renderBar() {
   $("frameNo").textContent = n ? `${shownIndex() + 1}/${n}` : "0/0";
   const f = ex.frames[shownIndex()], q = f && f.cut ? f.cut.quality || [] : [];
   const chip = $("flagChip");
-  chip.textContent = f && f.pass ? `MEDIAN · ${f.pass.n} EXPOSURES` : !f || !f.cut ? (f && f.failed ? "NOT LOADED" : "—")
-    : q.length ? q.map((x) => x.name).join(" · ") : "QUALITY OK";
+  chip.textContent = !f || !f.cut ? (f && f.failed ? "NOT LOADED" : "—") : q.length ? q.map((x) => x.name).join(" · ") : "QUALITY OK";
   chip.classList.toggle("bad", q.length > 0 || !!(f && f.failed));
-  $("stackBtn").setAttribute("aria-pressed", String(ex.stacked));
-  chip.title = f && f.pass ? "Pixel-by-pixel median of every loaded exposure in this sky pass" : q.length ? "SPHEREx quality flags within 1 pixel of the target: " + q.map((x) => `${x.name} (${x.desc})`).join("; ")
+  chip.title = q.length ? "SPHEREx quality flags within 1 pixel of the target: " + q.map((x) => `${x.name} (${x.desc})`).join("; ")
                         : "No SPHEREx quality flags within 1 pixel of the target";
   $("prev").setAttribute("aria-disabled", String(!n || nextLoadable(k, -1) < 0));
   $("next").setAttribute("aria-disabled", String(!n || nextLoadable(k, 1) < 0));
@@ -844,72 +827,6 @@ $("blinkBtn").addEventListener("click", () => {
   showFrame();
 });
 $("diffBtn").addEventListener("click", () => { stopBlink(); ex.diff = !ex.diff; showFrame(); });
-
-// ---- STACK: one median image per sky pass
-// SPHEREx scans each part of the sky in a burst of exposures about every six months. Exposures
-// more than PASS_GAP_DAYS apart start a new pass; near the ecliptic poles, where coverage is almost
-// continuous, a pass is also cut after PASS_MAX_DAYS. The stack is the per-pixel median of the
-// loaded exposures (robust to cosmic rays and other one-off artefacts); the frames are already
-// on one north-up grid, so pixels line up. Each exposure sees a slightly different wavelength
-// within the detector, so a stack is a broadband image of the whole detector range.
-const PASS_GAP_DAYS = 60, PASS_MAX_DAYS = 120;
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-function groupPasses(mjds) {          // -> array of [start index, end index] into the sorted mjds
-  const out = [];
-  mjds.forEach((m, i) => {
-    const cur = out[out.length - 1];
-    if (!cur || m - mjds[i - 1] > PASS_GAP_DAYS || m - mjds[cur[0]] > PASS_MAX_DAYS) out.push([i, i]); else cur[1] = i;
-  });
-  return out;
-}
-function medianStack(members) {
-  const n = members[0].cut.data.length, out = new Array(n), buf = new Float64Array(members.length);
-  for (let p = 0; p < n; p++) {
-    let k = 0;
-    for (const m of members) { const v = m.cut.data[p]; if (v !== null) buf[k++] = v; }
-    if (!k) { out[p] = null; continue; }
-    const s = buf.subarray(0, k).sort();
-    out[p] = k % 2 ? s[(k - 1) / 2] : (s[k / 2 - 1] + s[k / 2]) / 2;
-  }
-  return out;
-}
-function buildPasses() {
-  const loaded = ex.exposures.filter((f) => f.cut);
-  return groupPasses(loaded.map((f) => f.mjd)).map(([a, b]) => {
-    const members = loaded.slice(a, b + 1), first = members[0], last = members[members.length - 1];
-    const da = shortDate(first.date), db = shortDate(last.date);
-    const wls = members.map((m) => m.cut.wavelength_um).filter((x) => x);
-    const mon = MONTHS[+first.date.slice(5, 7) - 1];
-    return {
-      date: first.date, mjd: first.mjd, failed: false, members,
-      cut: { ...first.cut, data: medianStack(members), wavelength_um: null, quality: [] },
-      pass: {
-        n: members.length, label: `${mon} ${da.year}`,
-        span: `${Math.max(1, Math.round(last.mjd - first.mjd))} d`,
-        range: da.year === db.year ? `${da.day} – ${db.day} ${db.year}` : `${da.day} ${da.year} – ${db.day} ${db.year}`,
-        wl: wls.length ? `${Math.min(...wls).toFixed(2)}–${Math.max(...wls).toFixed(2)}` : "?",
-      },
-    };
-  });
-}
-function setStacked(on) {
-  if (on === ex.stacked || (on && $("stackBtn").disabled)) return;
-  stop(); stopBlink();
-  const cur = ex.frames[ex.current];
-  if (on) {
-    ex.frames = buildPasses();
-    const i = ex.frames.findIndex((p) => p.members.includes(cur));
-    ex.current = i >= 0 ? i : 0;
-  } else {
-    ex.frames = ex.exposures;
-    const i = cur && cur.members ? ex.exposures.indexOf(cur.members[0]) : -1;
-    ex.current = i >= 0 ? i : 0;
-  }
-  ex.stacked = on;
-  buildStrip(); renderInfo(); showFrame(); writeHash(ex.target);
-  toast(on ? `Stacked into ${ex.frames.length} sky passes` : "Showing each exposure");
-}
-$("stackBtn").addEventListener("click", () => setStacked(!ex.stacked));
 
 // ---- full screen
 function setFs(on) {
@@ -954,7 +871,6 @@ function writeHash(c) {
   p.set("ra", +c.ra.toFixed(6)); p.set("dec", +c.dec.toFixed(6));
   p.set("size", heightArcsec() || 240); p.set("band", $("band").value);
   p.set("speed", SPEED_LIST[ex.speedIdx]);
-  if (ex.stacked) p.set("stack", 1);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
@@ -970,7 +886,6 @@ function readHash() {
     let best = 2; SPEED_LIST.forEach((x, i) => { if (Math.abs(x - s) < Math.abs(SPEED_LIST[best] - s)) best = i; });
     ex.speedIdx = best;
   }
-  ex.wantStack = p.get("stack") === "1";
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }

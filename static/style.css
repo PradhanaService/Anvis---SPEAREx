@@ -145,10 +145,6 @@ a.tab:hover { color: #0b0b0b; }
 .popwarn strong { font-size: 12px; }
 .popwarn span { font-size: 12px; line-height: 1.45; color: #e0e0e0; }
 
-.md:disabled { opacity: .4; cursor: default; }
-.md:disabled:hover { background: transparent; }
-a.md { display: inline-flex; align-items: center; text-decoration: none; color: #fff; }
-
 .cbar { flex: none; min-height: 44px; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center;
   gap: 8px; padding: 0 10px; border-top: 1px solid rgba(255,255,255,.55); background: #000; }
 .cleft { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; }
