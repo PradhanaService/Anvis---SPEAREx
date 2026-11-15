@@ -387,7 +387,6 @@ function updatePickLabel() {
     const on = !!p && b.dataset.name === p.name;
     b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
   });
-  $("bandHint").textContent = `Detector ${bandShort($("band").value).slice(1)} · ${BANDS[$("band").value]}`;
 }
 
 function pvHover(h) {
@@ -472,7 +471,7 @@ $("dec").addEventListener("change", onTyped);
 $("band").addEventListener("change", () => loadPreview(pk.center));
 $("size").addEventListener("input", () => {
   const h = heightArcsec();
-  $("sizeHint").textContent = h ? `Field ${fmtArc(h)} × ${fmtArc(exploreWidth(h))} (width follows the viewer)` : "1–10 arcmin";
+  $("sizeHint").textContent = h ? `Field ${fmtArc(h)} × ${fmtArc(exploreWidth(h))}` : "1–10 arcmin";
   placePickMarks();
 });
 $("search").addEventListener("submit", (e) => { e.preventDefault(); runSearch(); });
