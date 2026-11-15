@@ -17,8 +17,9 @@ This is an independent tool using NASA SPHEREx data from IRSA; it is not an offi
 * Field height slider (1′–30′; the width follows the screen) with a download estimate such as
   "~59 frames · ~11 MB".
 * Band D1–D6, a **Search** button (Enter works too), and five presets (the challenge targets).
-* A real SPHEREx preview image you can pan, zoom and click to pick a position. A dashed box shows
-  the field the search will fetch.
+* A plain black grid of the whole sky: hover to read RA / Dec, scroll to zoom, drag to move,
+  click to choose a spot (RA and Dec fill in, a red ring marks it). Nothing is downloaded until
+  you press **Search**.
 
 **Page 2 – Explore**, controlled from one toolbar:
 

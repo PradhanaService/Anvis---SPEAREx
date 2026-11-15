@@ -66,37 +66,18 @@
   </aside>
 
   <section class="main">
-    <div class="topbar">
-      <div class="zoomrow" id="pvZoom">
-        <button class="tb" type="button" data-zoom="in" aria-label="Zoom in"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10M8 3v10"></path></svg></button>
-        <button class="tb" type="button" data-zoom="out" aria-label="Zoom out"><svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M3 8h10"></path></svg></button>
-        <span class="zpct">100%</span>
-      </div>
-      <button class="mapbtn" type="button" id="mapBtn" hidden title="Back to the map of the whole sky, to choose another spot"
-        aria-label="Show the whole-sky map"><svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="1.5" y="3" width="13" height="10"></rect><path d="M1.5 8h13M8 3v10M4.8 3v10M11.2 3v10"></path></svg>SKY MAP</button>
-    </div>
+    <!-- Credit line above the grid (the grid itself stays free of text). -->
+    <div class="topbar mapcredit"><span>SPHEREx data from NASA/IPAC <a href="https://irsa.ipac.caltech.edu/Missions/spherex.html" target="_blank" rel="noopener">IRSA</a><span id="pvReleases"></span></span></div>
 
-    <!-- The whole sky as a plain coordinate grid (lines only): nothing is downloaded until the user picks a spot. -->
+    <!-- The whole sky as a plain coordinate grid (lines only). A click only chooses the spot
+         (fills RA / Dec); Search then fetches the SPHEREx frames there. -->
     <div id="pvMap" class="sky skymap" tabindex="0" role="application"
-      aria-label="Map of the whole sky. Hover to read Right Ascension and Declination, click to choose a spot, scroll to zoom, drag to move.">
+      aria-label="Map of the whole sky. Hover to read Right Ascension and Declination, click to choose a spot, then press Search. Scroll to zoom, drag to move.">
       <canvas></canvas>
       <div class="cross-h" hidden></div><div class="cross-v" hidden></div>
       <div class="hovertag" hidden></div>
     </div>
 
-    <div id="pvSky" class="sky" hidden>
-      <canvas></canvas>
-      <div class="ov label">
-        <svg width="28" height="28" viewBox="0 0 46 46" fill="none" stroke="#ffffff" stroke-width="1.6" role="img" aria-label="Orientation: North up, East left"><path d="M34 34V10"></path><path d="M30 14l4-4 4 4"></path><path d="M34 34H10"></path><path d="M14 30l-4 4 4 4"></path><text x="30" y="8" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">N</text><text x="1" y="31" fill="#ffffff" stroke="none" font-size="9" font-family="Inter, sans-serif">E</text></svg>
-        <span class="lblt"><b id="pvName">Custom field</b><span class="mono" id="pvSubl"></span></span>
-      </div>
-      <div class="ov hintbar">Drag to pan · scroll to zoom · click to pick · <span id="pvCredit">SPHEREx image from IRSA</span><span id="pvReleases"></span></div>
-      <div class="region" hidden><div class="rtag"></div></div>
-      <div class="cross-h" hidden></div><div class="cross-v" hidden></div>
-      <div class="hovertag" hidden></div>
-      <div class="selmark" hidden><div class="ring"></div><div class="dot"></div></div>
-      <div class="loading" id="pvLoading" role="status" hidden><span class="spin"></span><span id="pvLoadingText">Loading SPHEREx image…</span></div>
-    </div>
   </section>
 </div>
 
@@ -243,7 +224,7 @@
         <dt>Declination (Dec)</dt>
         <dd>Up–down position in the sky. Like latitude on a map. From −90 to +90. Example: <b>4.77</b></dd>
         <dt>Or use the sky map</dt>
-        <dd>The big grid is a map of the <b>whole sky</b>. Move the mouse over it to read the position. Scroll to zoom in. <b>Click a spot</b> to choose it: RA and Dec fill in by themselves and a SPHEREx photo of that spot appears. The <b>Sky map</b> button brings the map back.</dd>
+        <dd>The big grid is a map of the <b>whole sky</b>. Move the mouse over it to read the position. Scroll to zoom in, drag to move. <b>Click a spot</b> to choose it: RA and Dec fill in by themselves and a red ring marks the spot. Then press <b>Search</b>.</dd>
       </dl>
     </section>
     <section>
@@ -268,7 +249,7 @@
           <b>RW Aurigae</b> – a young star whose brightness changes.<br>
           <b>R Draconis</b> – an old star that gets brighter and dimmer.</dd>
         <dt>Releases</dt>
-        <dd>Which batches of NASA data are used (shown at the bottom of the picture).</dd>
+        <dd>Which batches of NASA data are used (shown above the map).</dd>
       </dl>
     </section>
   </div>

@@ -2,7 +2,7 @@
 
 // ======================================================================
 // Anvis – SPHEREx Sky Explorer (frontend).
-// Page 1 (#pick):    pick a position on a real SPHEREx image, type it, or use a preset.
+// Page 1 (#pick):    choose a position on a whole-sky grid, type it, or use a preset; Search.
 // Page 2 (#explore): every SPHEREx image of that position in time order: playback, BLINK,
 //                    a Gaia DR3 overlay and an "About" pop-up for any clicked point.
 // All pixels come from IRSA through this app's backend (/api/frames, /api/cutout, /api/cutouts);
@@ -15,7 +15,6 @@
 
 const MAX_FRAMES = 300;          // if more images exist, show this many spread evenly in time
 const MAX_WIDTH = 1800;           // arcsec: widest field the backend serves (30')
-const PREVIEW_W = 1800;          // 01 PICK preview width, arcsec (30'); height follows the viewer's shape
 const BASE_FRAME_MS = 500;       // 1.0x playback speed
 const BLINK_MS = 450;            // BLINK alternates frames this often
 const DISPLAY = { minb: 1, maxb: 99.5, invert: false };   // brightness limits (percentiles of each frame)
@@ -367,92 +366,16 @@ function exploreWidth(h) {
 // ======================================================================
 // 01 PICK
 // ======================================================================
-// pk: page-1 state. center = middle of the preview image, pick = selected position,
-// band = band of the preview shown, loadId = bumps on every preview load (late replies are dropped).
-const pk = { center: null, pick: null, band: "", loadId: 0 };
-const pvBox = $("pvSky");
-const pvView = new SkyView(pvBox, $("pvZoom"), {
-  onHover: (h) => pvHover(h),
-  onPick: (q) => setPick(pixToSky(pvView.field, q.ix, q.iy), true),
-  onChange: () => placePickMarks(),
-});
+// pk: page-1 state: pick = the chosen position {ra, dec}.
+const pk = { pick: null };
 
-function pvLoading(text, spinner = true) {
-  $("pvLoading").hidden = !text;
-  if (text) $("pvLoadingText").textContent = text;
-  pvBox.querySelector(".spin").hidden = !spinner;
-}
-
-// Show the most recent SPHEREx image around `center` (30′ wide; height follows the viewer's shape).
-async function loadPreview(center) {
-  showPickView("image");
-  const id = ++pk.loadId, band = $("band").value;
-  pk.center = { ...center }; pk.band = band;
-  const r = pvView.rect();
-  const w = PREVIEW_W, h = Math.round(Math.min(1800, Math.max(300, w * (r.height / Math.max(1, r.width)))));
-  pvLoading("Loading SPHEREx image…");
-  $("pvCredit").textContent = "SPHEREx image from IRSA";
-  updatePickLabel();
-  try {
-    const list = await getJSON(framesURL(center.ra, center.dec, band));
-    if (id !== pk.loadId) return;
-    if (!list.frames.length) throw new Error(`no SPHEREx ${bandShort(band)} image covers this position yet`);
-    const f = list.frames[list.frames.length - 1];      // the most recent image
-    const cut = await getJSON(cutoutURL(f, center.ra, center.dec, h, w));
-    if (id !== pk.loadId) return;
-    pvView.setImage(cut, center.ra, center.dec, DISPLAY);
-    pvLoading("");
-    $("pvCredit").innerHTML = `SPHEREx ${esc(bandShort(band))} · ${esc(f.date.slice(0, 10))} · ` +
-      `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">image file at IRSA</a>`;
-    placePickMarks();
-  } catch (e) {
-    if (id !== pk.loadId) return;
-    pvView.clearImage();
-    pvLoading("Could not load a SPHEREx image here: " + e.message, false);
-  }
-}
-
-// Image label (preset name or "Custom field") and the highlighted preset button.
+// Highlight the preset button whose position is chosen (if any).
 function updatePickLabel() {
   const p = presetAt(pk.pick);
-  $("pvName").textContent = p ? p.name : "Custom field";
-  $("pvSubl").textContent = `${bandShort($("band").value)} · ${BANDS[$("band").value]} · 6.15″/px`;
   $("presets").querySelectorAll(".pr").forEach((b) => {
     const on = !!p && b.dataset.name === p.name;
     b.classList.toggle("on", on); b.setAttribute("aria-pressed", String(on));
   });
-}
-
-// Dashed crosshair and RA/Dec read-out following the mouse.
-function pvHover(h) {
-  const show = !!h;
-  pvBox.querySelector(".cross-h").hidden = !show;
-  pvBox.querySelector(".cross-v").hidden = !show;
-  const tag = pvBox.querySelector(".hovertag"); tag.hidden = !show;
-  if (!show) return;
-  const r = pvView.rect(), c = pixToSky(pvView.field, h.ix, h.iy);
-  pvBox.querySelector(".cross-h").style.top = h.y + "px";
-  pvBox.querySelector(".cross-v").style.left = h.x + "px";
-  tag.innerHTML = `<b>RA </b> ${esc(fmtRA(c.ra))}\n<b>DEC</b> ${esc(fmtDec(c.dec))}`;
-  tag.style.left = h.x + "px"; tag.style.top = h.y + "px";
-  tag.style.transform = (h.x > r.width * 0.7 ? "translate(calc(-100% - 14px), " : "translate(14px, ") +
-                        (h.y > r.height * 0.8 ? "calc(-100% - 14px))" : "14px)");
-}
-
-// Selection ring, and the dashed box of the field Search will fetch.
-function placePickMarks() {
-  const m = pvBox.querySelector(".selmark"), reg = pvBox.querySelector(".region");
-  const tgt = pk.pick || pk.center;
-  if (!tgt || !pvView.field || !pvView.hasImage) { m.hidden = reg.hidden = true; return; }
-  const p = skyToPix(pvView.field, tgt.ra, tgt.dec);
-  if (pk.pick && pvView.inside(p.ix, p.iy)) pvView.place(m, p.ix, p.iy); else m.hidden = true;
-  const h = heightArcsec();
-  if (!h || !pvView.inside(p.ix, p.iy)) { reg.hidden = true; return; }
-  const w = exploreWidth(h), s = pvView.field.scale;
-  const a = pvView.toScreen(p.ix - w / s / 2, p.iy - h / s / 2), b = pvView.toScreen(p.ix + w / s / 2, p.iy + h / s / 2);
-  reg.hidden = false;
-  Object.assign(reg.style, { left: a.x + "px", top: a.y + "px", width: (b.x - a.x) + "px", height: (b.y - a.y) + "px" });
-  reg.querySelector(".rtag").textContent = `${fmtArc(h)} × ${fmtArc(w)} FIELD`;
 }
 
 // Select a position (from a click or typing); optionally write it into the RA/Dec fields.
@@ -462,7 +385,7 @@ function setPick(c, fillInputs) {
     $("ra").value = c.ra.toFixed(5); $("dec").value = (c.dec >= 0 ? "+" : "") + c.dec.toFixed(5);
     $("err").hidden = true;
   }
-  updateHints(); updatePickLabel(); placePickMarks(); updateEstimate(); drawMap();
+  updateHints(); updatePickLabel(); updateEstimate(); drawMap();
 }
 
 function updateHints() {
@@ -487,15 +410,13 @@ function onTyped() {
   const c = typedPosition(false);
   if (!c) return;
   setPick(c, false);
-  // Re-centre the preview when the typed position is outside it.
-  const p = pvView.field && skyToPix(pvView.field, c.ra, c.dec);
-  if (!p || !pvView.inside(p.ix, p.iy)) loadPreview(c);
+  centreMap(c);        // show the typed position on the grid (nothing is downloaded until Search)
 }
 
-// ---- whole-sky map: what page 1 shows until a spot is chosen (nothing is downloaded before that).
+// ---- whole-sky map: page 1's picture. Nothing is downloaded here; Search fetches the frames.
 // A plain black grid of the whole sky (lines only): RA 360° → 0° from left to right (east left,
 // as on the images), Dec −90° → +90° from bottom to top. Hover reads RA / Dec; a click chooses
-// that spot (fills RA / Dec and loads the SPHEREx picture there); scroll zooms, drag moves.
+// that spot (fills RA / Dec, marked with a red ring); scroll zooms, drag moves.
 const mapBox = $("pvMap"), mapCv = mapBox.querySelector("canvas");
 const map = { z: 1, ra0: 180, dec0: 0, drag: null };
 function mapSize() { const r = mapBox.getBoundingClientRect(); return { W: r.width, H: r.height, r }; }
@@ -573,25 +494,13 @@ mapBox.addEventListener("pointerup", (e) => {
   const p = mapLocal(e), q = mapSky(p.x, p.y);
   if (!onSky(q)) return;
   mapHover(null);
-  setPick(q, true); loadPreview(q);        // the user's choice: now fetch the SPHEREx picture there
+  setPick(q, true);        // only chooses the spot; Search fetches the frames
 });
 mapBox.addEventListener("pointerleave", () => { map.drag = null; mapBox.classList.remove("dragging"); mapHover(null); });
 mapBox.addEventListener("wheel", (e) => { e.preventDefault(); const p = mapLocal(e); mapZoomAt(p.x, p.y, map.z * (e.deltaY < 0 ? 1.25 : 1 / 1.25)); }, { passive: false });
 new ResizeObserver(() => drawMap()).observe(mapBox);
-// Map or picture on page 1; the SKY MAP button returns to the map, centred on the chosen spot.
-function showPickView(v) {
-  const toMap = v === "map";
-  mapBox.hidden = !toMap; pvBox.hidden = toMap;
-  document.querySelector("#pick .topbar").hidden = toMap;   // zoom row and SKY MAP belong to the picture
-  $("pvZoom").style.visibility = toMap ? "hidden" : "";
-  $("mapBtn").hidden = toMap;
-  if (toMap) {
-    pk.loadId++; pvLoading("");            // stop waiting for a picture
-    if (pk.pick) { map.ra0 = pk.pick.ra; map.dec0 = pk.pick.dec; }
-    requestAnimationFrame(drawMap);
-  } else requestAnimationFrame(() => pvView.draw());
-}
-$("mapBtn").addEventListener("click", () => showPickView("map"));
+// Centre the grid on a position (kept within the sky).
+function centreMap(c) { map.ra0 = c.ra; map.dec0 = c.dec; drawMap(); }
 
 function runSearch() {      // returns true when the search starts
   const c = typedPosition(true);
@@ -613,12 +522,12 @@ $("ra").addEventListener("input", updateHints);
 $("dec").addEventListener("input", updateHints);
 $("ra").addEventListener("change", onTyped);
 $("dec").addEventListener("change", onTyped);
-$("band").addEventListener("change", () => { if (pvBox.hidden || !pk.center) { updatePickLabel(); drawMap(); } else loadPreview(pk.center); updateEstimate(); });
+$("band").addEventListener("change", () => { updatePickLabel(); updateEstimate(); });
 $("size").addEventListener("input", () => {
   const h = heightArcsec();
   $("sizeVal").textContent = h ? fmtArc(h) : "";
   $("sizeHint").textContent = h ? `Field ${fmtArc(h)} × ${fmtArc(exploreWidth(h))}` : `1–${MAX_HEIGHT_ARCMIN} arcmin`;
-  placePickMarks(); updateEstimate();
+  drawMap(); updateEstimate();
 });
 
 // ---- download estimate under the slider: "~59 frames · ~14 MB · larger = slower"
@@ -649,7 +558,7 @@ function updateEstimate() {
   }, 400);
 }
 
-// The releases (IRSA collections) the server searches, shown in the preview credit.
+// The releases (IRSA collections) the server searches, shown in the credit above the grid.
 async function loadReleases() {
   try {
     const d = await getJSON("api/collections");
@@ -1527,7 +1436,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === " ") { e.preventDefault(); ex.playing ? stop() : play(); }
 });
 
-// Back to page 1, with the searched position selected (the preview reloads if needed).
+// Back to page 1, with the searched position selected and marked on the grid.
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
   stop(); stopBlink(); ex.searchId++; gaia.id++; wise.id++;
@@ -1535,12 +1444,7 @@ $("back").addEventListener("click", (e) => {
   $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;
   requestAnimationFrame(() => {
-    if (c) {
-      setPick(c, true);
-      const p = pvView.field && skyToPix(pvView.field, c.ra, c.dec);
-      if (!p || !pvView.inside(p.ix, p.iy) || $("band").value !== pk.band) loadPreview(c);
-    }
-    pvView.draw();
+    if (c) { setPick(c, true); centreMap(c); } else drawMap();
   });
 });
 
@@ -1655,10 +1559,9 @@ function initHint() {
   renderBar();
   if (c) {
     $("ra").value = c.ra.toFixed(5); $("dec").value = (c.dec >= 0 ? "+" : "") + c.dec.toFixed(5);
-    pk.pick = c; pk.center = { ...c }; updateHints(); updatePickLabel();
+    pk.pick = c; updateHints(); updatePickLabel();
     openExplore(c);
   } else {
-    showPickView("map");     // start on the whole-sky map: nothing is downloaded until the user chooses
-    updateHints(); updatePickLabel(); updateEstimate();
+    updateHints(); updatePickLabel(); updateEstimate(); drawMap();   // the empty grid; nothing downloaded
   }
 })();

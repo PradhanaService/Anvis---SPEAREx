@@ -333,11 +333,9 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 /* ---------------- page 1: whole-sky map (shown until a spot is chosen) ---------------- */
 .skymap { cursor: crosshair; }
 .skymap:focus-visible { outline: 2px solid #E03C31; outline-offset: -2px; }
-.sky[hidden], .topbar[hidden] { display: none; }
-.mapbtn { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; margin-left: auto; background: #0b0b0b; color: #fff;
-  border: 0; font: 600 11px 'DM Mono', monospace; letter-spacing: .06em; cursor: pointer; }
-.mapbtn:hover { background: #262626; }
-.mapbtn:focus-visible { outline: 2px solid #E03C31; outline-offset: 2px; }
+.sky[hidden] { display: none; }
+.mapcredit { justify-content: flex-start; font-size: 11px; color: #5c5c5c; }
+.mapcredit a { color: #0b0b0b; }
 
 /* The i (help) button: solid red with a white i, like the app's other main buttons; it pulses
    gently until it has been opened once (no animation for people who prefer reduced motion). */
