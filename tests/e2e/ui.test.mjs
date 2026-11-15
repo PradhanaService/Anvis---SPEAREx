@@ -113,10 +113,10 @@ async function page1() {
   const sky = await p.locator("#pvSky").boundingBox();
   await check("P1 hover: crosshair and RA/Dec read-out follow the mouse", async () => {
     await p.mouse.move(sky.x + sky.width * 0.3, sky.y + sky.height * 0.4);
-    assert(await p.isVisible(".cross-h") && await p.isVisible(".cross-v"));
-    assert(/^RA\s+\d\dh \d\dm \d\d\.\ds\nDEC [+−]\d\d° \d\d′ \d\d″$/.test(await p.textContent(".hovertag")));
+    assert(await p.isVisible("#pvSky .cross-h") && await p.isVisible("#pvSky .cross-v"));
+    assert(/^RA\s+\d\dh \d\dm \d\d\.\ds\nDEC [+−]\d\d° \d\d′ \d\d″$/.test(await p.textContent("#pvSky .hovertag")));
     await p.mouse.move(sky.x - 50, sky.y - 50);
-    assert(await p.isHidden(".hovertag"), "read-out stays after leaving");
+    assert(await p.isHidden("#pvSky .hovertag"), "read-out stays after leaving");
   });
   await check("P1 click picks a position: fields, label, ring, presets update", async () => {
     await p.mouse.click(sky.x + sky.width * 0.3, sky.y + sky.height * 0.4);
