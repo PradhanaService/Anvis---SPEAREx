@@ -670,6 +670,34 @@ async function ux() {
   await close(h);
 }
 
+// ================================================================== target ring (synthetic data, no IRSA needed)
+async function targetRing() {
+  const SPX = "https://irsa.ipac.caltech.edu/ibe/data/spherex/dr1/x/";
+  const frames = { ra: 269.446259, dec: 4.768324, band: "SPHEREx-D3",
+    frames: [0, 1].map((i) => ({ obs_id: "F" + i, collection: "spherex_dr1", mjd: 60800 + i * 200, date: `202${5 + i}-01-10 12:00:00`, url: SPX + i + ".fits", epoch: i })),
+    epochs: [0, 1].map((k) => ({ index: k, first: k, last: k, n: 1, start_mjd: 60800 + 200 * k, end_mjd: 60800 + 200 * k, start: `202${5 + k}-01-10 12:00:00`, end: `202${5 + k}-01-10 12:00:00` })) };
+  const W = 160, H = 98, data = [];
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) data.push(+(0.05 + 40 * Math.exp(-((x + 0.5 - W / 2) ** 2 + (y + 0.5 - H / 2) ** 2) / 2)).toFixed(4));
+  const stack = { width: W, height: H, pixel_scale_arcsec: 6.15, data, unit: "MJy/sr", wavelength_range_um: [1.63, 2.41], n_frames: 1, n_used: 1, n_failed: 0, quality: [] };
+  const p = await open("#ra=269.446259&dec=4.768324&size=600&band=SPHEREx-D3", { setup: async (page) => {
+    await page.route("**/api/frames*", (r) => r.fulfill({ json: frames }));
+    await page.route("**/api/stack*", (r) => r.fulfill({ json: stack }));
+    await page.route("**/api/gaia*", (r) => r.fulfill({ json: { stars: [] } }));
+  } });
+  await p.waitForFunction(() => ex.lists.stacks && ex.lists.stacks.finished, null, { timeout: 60000 });
+  const offset = () => p.evaluate(() => { const t = document.getElementById("targetRing").getBoundingClientRect(), r = exView.rect(),
+    c = exView.toScreen(exView.field.nx / 2, exView.field.ny / 2); return Math.hypot(t.left + t.width / 2 - r.left - c.x, t.top + t.height / 2 - r.top - c.y); });
+  await check("RING a red ring marks the searched position on the image, also after zooming and in Diff", async () => {
+    assert(await p.isVisible("#targetRing"), "ring shown");
+    assert((await offset()) < 1, "ring centred on the target");
+    await p.click('#exZoom [data-zoom="in"]'); await p.click('#exZoom [data-zoom="in"]');
+    assert((await offset()) < 1, "ring follows the zoom");
+    await p.click('[data-mode="diff"]'); await p.locator(".fr").last().click();
+    assert(await p.isVisible("#targetRing") && (await offset()) < 1, "ring in Diff mode");
+  });
+  await close(p);
+}
+
 // ================================================================== failures (simulated)
 async function failures() {
 
@@ -782,7 +810,7 @@ async function layout() {
 // ================================================================== run
 browser = await chromium.launch(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {});
 const t0 = Date.now();
-for (const part of [page1, page2, stacks, ux, failures, layout]) {
+for (const part of [page1, page2, stacks, ux, targetRing, failures, layout]) {
   try { await part(); } catch (e) { results.push([false, `${part.name} crashed: ${e.message}`]); console.log("FAIL", part.name, "crashed:", e.message); }
 }
 await browser.close();

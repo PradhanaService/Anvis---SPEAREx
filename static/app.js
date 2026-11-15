@@ -971,10 +971,12 @@ $("refSel").addEventListener("change", (e) => {
   showFrame(); writeHash(ex.target);
 });
 
-// Overlays that follow the image: region outline, selection ring, pop-up position, Gaia rings.
+// Overlays that follow the image: region outline, target ring, selection ring, pop-up position,
+// Gaia rings. The target ring marks the position that was searched (the centre of the field).
 function placeExMarks() {
-  const edge = exBox.querySelector(".frameedge"), ring = exBox.querySelector(".selring");
-  if (!exView.field || !exView.hasImage) { edge.hidden = ring.hidden = true; return; }
+  const edge = exBox.querySelector(".frameedge"), ring = exBox.querySelector(".selring"), tgt = $("targetRing");
+  if (!exView.field || !exView.hasImage) { edge.hidden = ring.hidden = tgt.hidden = true; return; }
+  exView.place(tgt, exView.field.nx / 2, exView.field.ny / 2);
   const a = exView.toScreen(0, 0), b = exView.toScreen(exView.field.nx, exView.field.ny);
   edge.hidden = a.y < 24;   // only when there is room above the image for the tag
   Object.assign(edge.style, { left: a.x + "px", top: a.y + "px", width: (b.x - a.x) + "px", height: (b.y - a.y) + "px" });

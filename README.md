@@ -166,8 +166,13 @@ Then open http://localhost:8000 and pick a preset, or open a link such as
 http://localhost:8000/#ra=269.446259&dec=4.768324 (Barnard's Star).
 
 Settings (environment variables): `ANVIS_COLLECTIONS` (releases, see below), `ANVIS_CACHE_MB`
-(memory cache for frames and stacks, default 300), `ANVIS_CACHE` (folder for cached
-wavelength tables, default `cache/`).
+(memory cache for frames and stacks, default 300), `ANVIS_DISK_CACHE_MB` (disk cache of
+everything downloaded from IRSA and MAST, default 2000; `0` turns it off), `ANVIS_CACHE`
+(cache folder, default `cache/`).
+
+Speed: the first search of a position downloads from IRSA (seconds to a minute, depending on
+IRSA). Every later search of it – also after restarting the app – comes from the disk cache and
+is near-instant, and keeps working while IRSA is down.
 
 ## Deploy (make it public)
 
