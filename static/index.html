@@ -101,6 +101,8 @@
   <div class="viewwrap" id="viewwrap">
     <div id="exSky" class="sky">
       <canvas></canvas>
+      <canvas class="gaiacv" id="gaiaCanvas" aria-hidden="true"></canvas>
+      <div class="ov gaialbl mono" id="gaiaLabel" hidden></div>
       <div class="frameedge" hidden><div class="rtag" id="regionTag"></div></div>
       <div class="selring" hidden></div>
       <div class="ov label">
@@ -146,6 +148,7 @@
         <span class="flag mono" id="flagChip">QUALITY OK</span>
         <button class="md" type="button" id="blinkBtn" aria-pressed="false">BLINK</button>
         <button class="md" type="button" id="diffBtn" aria-pressed="false">DIFF</button>
+        <button class="md" type="button" id="gaiaBtn" aria-pressed="false" title="Overlay Gaia DR3 stars (from MAST), moved to each frame's date">GAIA</button>
       </div>
       <div class="cmid">
         <button class="pb plain" type="button" id="prev" aria-label="Previous observation"><svg width="16" height="16" viewBox="0 0 18 18" fill="currentColor" aria-hidden="true"><path d="M13.5 3.5v11L5.5 9z"></path><rect x="3" y="3.5" width="1.8" height="11"></rect></svg></button>

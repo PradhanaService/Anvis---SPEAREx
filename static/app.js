@@ -534,6 +534,7 @@ async function openExplore(c) {
   Object.assign(ex, { target: c, name: p ? p.name : "Custom field", band: $("band").value, h: heightArcsec(),
                       frames: [], current: 0, pick: null, listTotal: 0, done: 0, failed: 0, finished: false });
   ex.w = exploreWidth(ex.h);
+  loadGaia(c);
   $("strip").innerHTML = ""; $("exCredit").textContent = "";
   $("pop").hidden = true; $("noObs").hidden = true;
   exView.field = null; exView.clearImage();
@@ -713,6 +714,7 @@ function placeExMarks() {
   $("regionTag").textContent = `YOUR REGION · ${fmtArc(ex.h)} × ${fmtArc(ex.w)}`;
   if (ex.pick) exView.place(ring, ex.pick.ix, ex.pick.iy); else ring.hidden = true;
   if (!$("pop").hidden) positionPop();
+  drawGaia();
 }
 
 // ---- "About" pop-up for a clicked position (values read from the image shown)
@@ -739,7 +741,7 @@ function renderPop() {
     prow("From target", off < 0.05 ? "0″" : esc(`${off.toFixed(1)}″ · PA ${pa.toFixed(0)}°`)),
     prow("Source file", `<a href="${encodeURI(f.url)}" target="_blank" rel="noopener">FITS at IRSA</a>`),
   ];
-  $("popRows").innerHTML = rows.join("");
+  $("popRows").innerHTML = rows.join("") + gaiaPopRows(c, f.mjd);
   $("popNoData").hidden = val !== null;
   pop.hidden = false;
   positionPop();
@@ -828,6 +830,111 @@ $("blinkBtn").addEventListener("click", () => {
 });
 $("diffBtn").addEventListener("click", () => { stopBlink(); ex.diff = !ex.diff; showFrame(); });
 
+// ---- GAIA: Gaia DR3 stars from MAST, moved to each frame's date
+// Gaia positions are for epoch 2016.0; each star is moved by its proper motion to the date of the
+// frame on screen (parallax shifts, at most ~0.8″, are ignored: well under one 6.15″ pixel).
+const GAIA_GMAX = 19, GAIA_MATCH_ARCSEC = 6.2, GAIA_HIGH_PM = 100, GAIA_ARROW_YEARS = 10;
+const MJD_J2016 = 57388.5;   // Julian epoch 2016.0
+const GAIA_COLOR = "#38bdf8";
+const gaia = { on: false, data: null, error: null, loading: false, id: 0 };
+
+async function loadGaia(c) {
+  const id = ++gaia.id;
+  Object.assign(gaia, { data: null, error: null, loading: true });
+  drawGaia();
+  const radius = Math.min(0.3, Math.hypot(ex.w, ex.h) / 2 / 3600 + 0.01);
+  try {
+    const d = await getJSON(`api/gaia?ra=${c.ra}&dec=${c.dec}&radius=${radius.toFixed(4)}&gmax=${GAIA_GMAX}`);
+    if (id !== gaia.id) return;
+    gaia.data = d;
+  } catch (e) {
+    if (id !== gaia.id) return;
+    gaia.error = e.message;
+  }
+  gaia.loading = false;
+  drawGaia(); if (!$("pop").hidden) renderPop();
+}
+// Star [id, ra, dec, pmra, pmdec, plx, plx_err, G, bp_rp] -> {ra, dec} at the given MJD.
+function gaiaAt(st, mjd) {
+  const yrs = (mjd - MJD_J2016) / 365.25, dec = st[2] + ((st[4] || 0) * yrs) / 3.6e6;
+  return { ra: st[1] + ((st[3] || 0) * yrs) / 3.6e6 / Math.cos((st[2] * Math.PI) / 180), dec };
+}
+function drawGaia() {
+  const cv = $("gaiaCanvas"), lbl = $("gaiaLabel"), r = exView.rect(), dpr = Math.min(2, window.devicePixelRatio || 1);
+  const W = Math.round(r.width * dpr), H = Math.round(r.height * dpr);
+  if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+  const ctx = cv.getContext("2d");
+  ctx.setTransform(1, 0, 0, 1, 0, 0); ctx.clearRect(0, 0, W, H);
+  $("gaiaBtn").setAttribute("aria-pressed", String(gaia.on));
+  lbl.hidden = !gaia.on;
+  if (!gaia.on) return;
+  if (gaia.loading) { lbl.textContent = "GAIA DR3 · loading from MAST…"; return; }
+  if (gaia.error) { lbl.textContent = "GAIA DR3 · unavailable: " + gaia.error; return; }
+  const f = ex.frames[shownIndex()];
+  if (!gaia.data || !exView.field || !exView.hasImage || !f) { lbl.textContent = "GAIA DR3"; return; }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  const fld = exView.field, k = exView.k(), zs = Math.min(1.6, Math.sqrt(exView.z));
+  let shown = 0;
+  for (const st of gaia.data.stars) {
+    const pos = gaiaAt(st, f.mjd), q = skyToPix(fld, pos.ra, pos.dec), p = exView.toScreen(q.ix, q.iy);
+    if (p.x < -20 || p.y < -20 || p.x > r.width + 20 || p.y > r.height + 20) continue;
+    shown++;
+    const rad = Math.max(3.5, Math.min(9, 9 - ((st[7] || 19) - 10) * 0.55)) * zs;
+    const pm = Math.hypot(st[3] || 0, st[4] || 0);
+    ctx.lineWidth = 3; ctx.strokeStyle = "rgba(0,0,0,0.6)";
+    ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 2 * Math.PI); ctx.stroke();
+    ctx.lineWidth = pm >= GAIA_HIGH_PM ? 2 : 1.25; ctx.strokeStyle = GAIA_COLOR;
+    ctx.beginPath(); ctx.arc(p.x, p.y, rad, 0, 2 * Math.PI); ctx.stroke();
+    if (pm >= GAIA_HIGH_PM) {   // arrow: where proper motion carries the star in GAIA_ARROW_YEARS
+      const len = ((pm / 1000) * GAIA_ARROW_YEARS / fld.scale) * k;   // screen px
+      const ux = -(st[3] || 0) / pm, uy = -(st[4] || 0) / pm;          // east is left, north is up
+      const x0 = p.x + ux * rad, y0 = p.y + uy * rad, x1 = p.x + ux * (rad + len), y1 = p.y + uy * (rad + len);
+      for (const [w, col] of [[3.5, "rgba(0,0,0,0.6)"], [1.5, GAIA_COLOR]]) {
+        ctx.lineWidth = w; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1);
+        const a = Math.atan2(y1 - y0, x1 - x0);
+        ctx.moveTo(x1, y1); ctx.lineTo(x1 - 7 * Math.cos(a - 0.45), y1 - 7 * Math.sin(a - 0.45));
+        ctx.moveTo(x1, y1); ctx.lineTo(x1 - 7 * Math.cos(a + 0.45), y1 - 7 * Math.sin(a + 0.45));
+        ctx.stroke();
+      }
+    }
+  }
+  const d = shortDate(f.date);
+  lbl.textContent = `GAIA DR3 · G < ${GAIA_GMAX} · ${shown} stars · at ${d.day} ${d.year}` +
+    (gaia.data.truncated ? ` · brightest ${gaia.data.stars.length} only` : "") + ` · arrows: ${GAIA_ARROW_YEARS}-yr motion`;
+}
+// Pop-up rows for the nearest Gaia star to sky position c at the given date.
+function gaiaPopRows(c, mjd) {
+  const head = `<div class="popsec">GAIA DR3 · MAST</div>`;
+  if (gaia.loading) return head + `<div class="popnote">Loading Gaia stars…</div>`;
+  if (gaia.error) return head + `<div class="popnote">Gaia unavailable: ${esc(gaia.error)}</div>`;
+  if (!gaia.data) return "";
+  let best = null, bd = Infinity, n = 0;
+  const cosd = Math.cos((c.dec * Math.PI) / 180);
+  for (const st of gaia.data.stars) {
+    const p = gaiaAt(st, mjd);
+    let dra = p.ra - c.ra; if (dra > 180) dra -= 360; if (dra < -180) dra += 360;
+    const sep = Math.hypot(dra * cosd, p.dec - c.dec) * 3600;
+    if (sep <= GAIA_MATCH_ARCSEC) n++;
+    if (sep < bd) { bd = sep; best = st; }
+  }
+  if (!best || bd > GAIA_MATCH_ARCSEC) {
+    return head + `<div class="popnote">No Gaia DR3 star brighter than G ${GAIA_GMAX} within ${GAIA_MATCH_ARCSEC}″ at this date.</div>`;
+  }
+  const [id, , , pmra, pmdec, plx, plxErr, g, bprp] = best;
+  const pm = Math.hypot(pmra || 0, pmdec || 0), pa = ((Math.atan2(pmra || 0, pmdec || 0) * 180) / Math.PI + 360) % 360;
+  const good = plx && plxErr && plx / plxErr >= 5 && plx > 0;
+  return head + [
+    `<div class="prow wide"><div class="k">Gaia DR3 source</div><div class="v">${esc(id)}</div></div>`,
+    prow("G magnitude", g != null ? g.toFixed(2) : "—"),
+    prow("BP − RP colour", bprp != null ? bprp.toFixed(2) : "—"),
+    prow("Parallax", plx != null ? `${plx.toFixed(2)} ± ${(plxErr || 0).toFixed(2)} mas` : "—"),
+    prow("Distance", good ? `${(1000 / plx).toFixed(plx > 10 ? 1 : 0)} pc · ${(3261.56 / plx).toFixed(plx > 10 ? 1 : 0)} ly` : "uncertain"),
+    prow("Proper motion", pmra != null ? `${pm.toFixed(1)} mas/yr · PA ${pa.toFixed(0)}°` : "—"),
+    prow("Offset", `${bd.toFixed(1)}″` + (n > 1 ? ` · ${n} stars within ${GAIA_MATCH_ARCSEC}″` : "")),
+  ].join("");
+}
+$("gaiaBtn").addEventListener("click", () => { gaia.on = !gaia.on; drawGaia(); if (ex.target) writeHash(ex.target); });
+
 // ---- full screen
 function setFs(on) {
   $("viewwrap").classList.toggle("fs", on);
@@ -848,7 +955,7 @@ document.addEventListener("keydown", (e) => {
 
 $("back").addEventListener("click", (e) => {
   e.preventDefault();
-  stop(); stopBlink(); setFs(false); ex.searchId++;
+  stop(); stopBlink(); setFs(false); ex.searchId++; gaia.id++;
   history.replaceState(null, "", location.pathname + location.search);
   $("explore").hidden = true; $("pick").hidden = false;
   const c = ex.target;
@@ -871,6 +978,7 @@ function writeHash(c) {
   p.set("ra", +c.ra.toFixed(6)); p.set("dec", +c.dec.toFixed(6));
   p.set("size", heightArcsec() || 240); p.set("band", $("band").value);
   p.set("speed", SPEED_LIST[ex.speedIdx]);
+  if (gaia.on) p.set("gaia", 1);
   history.replaceState(null, "", "#" + p.toString());
 }
 function readHash() {
@@ -886,6 +994,7 @@ function readHash() {
     let best = 2; SPEED_LIST.forEach((x, i) => { if (Math.abs(x - s) < Math.abs(SPEED_LIST[best] - s)) best = i; });
     ex.speedIdx = best;
   }
+  gaia.on = p.get("gaia") === "1";
   const ra = p.has("ra") ? parseRA(p.get("ra")) : null, dec = p.has("dec") ? parseDec(p.get("dec")) : null;
   return ra !== null && dec !== null ? { ra, dec } : null;
 }

@@ -28,6 +28,7 @@ from functools import lru_cache
 import numpy as np
 import requests
 from astropy.io import fits
+from astropy.io.votable import parse_single_table
 from astropy.time import Time
 from astropy.wcs import WCS
 from flask import Flask, Response, jsonify, request, send_from_directory
@@ -434,6 +435,56 @@ def cutouts():
                 fut.cancel()
 
     return Response(generate(), mimetype="application/x-ndjson")
+
+
+# ----------------------------------------------------------------------------- Gaia
+# Gaia DR3 stars from MAST (STScI) via its TAP service, for the overlay and the About pop-up.
+MAST_GAIA_TAP = "https://mast.stsci.edu/vo-tap/api/v0.1/gaiadr3/sync"
+GAIA_COLUMNS = ("source_id", "ra", "dec", "pmra", "pmdec", "parallax", "parallax_error", "phot_g_mean_mag", "bp_rp")
+GAIA_MAX_STARS = 5000
+GAIA_EPOCH = 2016.0   # Gaia DR3 reference epoch (Julian year) for ra, dec
+
+
+@lru_cache(maxsize=256)
+def gaia_cone(ra, dec, radius_deg, gmax):
+    query = (f"SELECT TOP {GAIA_MAX_STARS} {', '.join(GAIA_COLUMNS)} FROM dbo.gaia_source "
+             f"WHERE 1=CONTAINS(POINT('ICRS', ra, dec), CIRCLE('ICRS', {ra}, {dec}, {radius_deg})) "
+             f"AND phot_g_mean_mag < {gmax} ORDER BY phot_g_mean_mag")
+    r = irsa_get(MAST_GAIA_TAP, params={"REQUEST": "doQuery", "LANG": "ADQL", "QUERY": query}, timeout=120)
+    table = parse_single_table(io.BytesIO(r.content)).to_table()
+
+    def num(v, nd):
+        return None if np.ma.is_masked(v) or not np.isfinite(v) else round(float(v), nd)
+
+    stars = [[str(int(t["source_id"])), num(t["ra"], 7), num(t["dec"], 7), num(t["pmra"], 3), num(t["pmdec"], 3),
+              num(t["parallax"], 4), num(t["parallax_error"], 4), num(t["phot_g_mean_mag"], 3), num(t["bp_rp"], 3)]
+             for t in table]
+    return json.dumps({"epoch": GAIA_EPOCH, "gmax": gmax, "columns": list(GAIA_COLUMNS), "stars": stars,
+                       "truncated": len(stars) >= GAIA_MAX_STARS, "source": "Gaia DR3 via MAST (STScI)"},
+                      separators=(",", ":"))
+
+
+@app.get("/api/gaia")
+def gaia():
+    """Gaia DR3 stars (G < gmax) within radius_deg of (ra, dec), brightest first, at epoch 2016.0."""
+    try:
+        ra, dec = parse_position()
+        radius = float(request.args.get("radius", 0.1))
+        gmax = float(request.args.get("gmax", 19))
+    except ValueError as e:
+        return bad(str(e))
+    if not 0.001 <= radius <= 0.3:
+        return bad("radius must be between 0.001 and 0.3 degrees")
+    if not 5 <= gmax <= 21:
+        return bad("gmax must be between 5 and 21")
+    try:
+        text = gaia_cone(round(ra, 5), round(dec, 5), round(radius, 4), round(gmax, 1))
+    except Exception as e:
+        app.logger.warning("Gaia query failed: %s", e)
+        return bad(f"Gaia query at MAST failed: {e}", 502)
+    resp = Response(text, mimetype="application/json")
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    return resp
 
 
 if __name__ == "__main__":

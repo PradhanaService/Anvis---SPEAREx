@@ -14,8 +14,9 @@ that patch of sky, in time order, in a WiseView-style flip-book player.
 | Subtract the `ZODI` extension from `IMAGE`, compute central wavelength from the spectral WCS (`key="W"`) | Same tutorials |
 | Resample every cutout onto one north-up grid (SPHEREx's orientation changes between visits) and play them in order | This app |
 
-All data comes from the NASA/IPAC Infrared Science Archive
-(https://irsa.ipac.caltech.edu/Missions/spherex.html). IRSA does not send CORS headers,
+All SPHEREx data comes from the NASA/IPAC Infrared Science Archive
+(https://irsa.ipac.caltech.edu/Missions/spherex.html). Gaia DR3 star positions come from MAST
+(https://archive.stsci.edu/missions-and-data/gaia), via its TAP service. IRSA does not send CORS headers,
 so a small Python backend (`app.py`) does the IRSA requests; the page itself is plain
 HTML/CSS/JS in `static/`.
 
@@ -32,6 +33,12 @@ The app has two pages:
    The quality chip and red dots on dates show SPHEREx quality flags at the target (from each
    image's FLAGS extension). Click the image for an "About" pop-up with the position, measured
    surface brightness (MJy/sr), wavelength and the original FITS file at IRSA.
+
+   **GAIA** overlays Gaia DR3 stars (G < 19, from MAST at STScI) on the images, each moved from
+   Gaia's 2016.0 epoch to the date of the frame shown using its proper motion; stars moving
+   faster than 100 mas/yr get an arrow showing 10 years of motion. The About pop-up shows the
+   nearest Gaia star (ID, G, BP−RP, parallax/distance, proper motion) within 6.2″, or says there
+   is none – a SPHEREx source with no Gaia match is worth a closer look.
 
 This is an independent tool using NASA SPHEREx data from IRSA; it is not an official NASA website.
 
