@@ -3,14 +3,16 @@
 // ======================================================================
 // Anvis – SPHEREx Sky Explorer (frontend).
 // Page 1 (#pick):    choose a position on a whole-sky grid, type it, or use a preset; Search.
-// Page 2 (#explore): every SPHEREx image of that position in time order: playback, BLINK,
-//                    a Gaia DR3 overlay and an "About" pop-up for any clicked point.
-// All pixels come from IRSA through this app's backend (/api/frames, /api/cutout, /api/cutouts);
-// Gaia stars come from MAST through /api/gaia.
+// Page 2 (#explore): every SPHEREx image of that position in time order, as epoch stacks or
+//                    single frames: playback, Blink / Diff, a brightness lock, a light curve,
+//                    Gaia and WISE overlays and an "About" pop-up for any clicked point.
+// All pixels come from IRSA through this app's backend (/api/frames, /api/cutouts, /api/stack);
+// Gaia stars come from MAST (/api/gaia), WISE sources from IRSA (/api/wise). The image maths
+// (coordinates, difference images, photometry) is in anvis-math.js.
 //
-// File layout: constants · coordinates · picture rendering · SkyView (zoom/pan/click viewer)
-// · API helpers · presets · page 1 · page 2 (loading, date strip, picture, pop-up, playback,
-// BLINK, GAIA, keys, Back) · shareable URL · start-up.
+// File layout: constants · picture rendering · SkyView (zoom/pan/click viewer) · API helpers
+// · presets · page 1 (sky grid, form) · page 2 (loading, views, date strip, picture, modes,
+// pop-up, playback, lock, light curve, Gaia, WISE, keys, Back) · help · shareable URL · start-up.
 // ======================================================================
 
 const MAX_FRAMES = 300;          // if more images exist, show this many spread evenly in time
@@ -267,8 +269,6 @@ class SkyView {
       c.imageSmoothingEnabled = true; c.imageSmoothingQuality = "high";
       c.drawImage(this.off, this.tx, this.ty, this.field.nx * k, this.field.ny * k);
     }
-    const zp = this.zoomScope.querySelector(".zpct");
-    if (zp) zp.textContent = Math.round(this.z * 100) + "%";
     this.onChange && this.onChange();
   }
   // Position an overlay element (absolutely positioned, zero-size anchor) at a sky position.
@@ -295,8 +295,6 @@ async function getJSON(url) {
   return j;
 }
 const framesURL = (ra, dec, band) => `api/frames?ra=${ra}&dec=${dec}&band=${encodeURIComponent(band)}`;
-const cutoutURL = (f, ra, dec, h, w) =>
-  `api/cutout?ra=${ra}&dec=${dec}&size=${h}&width=${w}&url=${encodeURIComponent(f.url)}`;
 // POST a list of frames to /api/cutouts and call onLine for each streamed result line.
 async function streamCutouts(list, c, id, onLine) {
   const r = await fetch(`api/cutouts?ra=${c.ra}&dec=${c.dec}&size=${ex.h}&width=${ex.w}`, {
@@ -1578,18 +1576,9 @@ function readHash() {
 // ======================================================================
 // ---- help screens: each i button opens the explanation of its page (a modal dialog: Esc,
 // the × button or a click outside closes it, and focus returns to the i button).
-// Until help has been opened once (remembered in this browser), the i buttons pulse gently.
-const HELP_KEY = "anvis.helpSeen";
-let helpSeen = false;
-try { helpSeen = localStorage.getItem(HELP_KEY) === "1"; } catch { /* storage blocked */ }
-document.querySelectorAll(".infobtn").forEach((b) => {
-  b.classList.toggle("attn", !helpSeen);
-  b.addEventListener("click", () => {
-    stop(); $(b.dataset.help).showModal();
-    document.querySelectorAll(".infobtn").forEach((x) => x.classList.remove("attn"));
-    try { localStorage.setItem(HELP_KEY, "1"); } catch { /* fine */ }
-  });
-});
+document.querySelectorAll(".infobtn").forEach((b) => b.addEventListener("click", () => {
+  stop(); $(b.dataset.help).showModal();
+}));
 document.querySelectorAll("dialog.help").forEach((d) => {
   d.querySelector("[data-close]").addEventListener("click", () => d.close());
   d.addEventListener("click", (e) => { if (e.target === d) d.close(); });   // the backdrop

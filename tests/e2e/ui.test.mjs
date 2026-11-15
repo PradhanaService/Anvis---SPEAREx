@@ -643,9 +643,7 @@ async function ux() {
 
   const hp = await open("", { viewport: { width: 1366, height: 768 } });
   await check("HELP the i button on page 1 opens one screen explaining every field; Esc closes it", async () => {
-    assert(await hp.evaluate(() => [...document.querySelectorAll(".infobtn")].every((b) => b.classList.contains("attn"))), "pulses before first use");
     await hp.click('[data-help="helpPick"]');
-    assert(await hp.evaluate(() => ![...document.querySelectorAll(".infobtn")].some((b) => b.classList.contains("attn"))), "stops after first use");
     const d = hp.locator("#helpPick");
     assert(await d.isVisible());
     const t = await d.textContent();

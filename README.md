@@ -17,9 +17,11 @@ This is an independent tool using NASA SPHEREx data from IRSA; it is not an offi
 * Field height slider (1′–30′; the width follows the screen) with a download estimate such as
   "~59 frames · ~11 MB".
 * Band D1–D6, a **Search** button (Enter works too), and five presets (the challenge targets).
-* A plain black grid of the whole sky: hover to read RA / Dec, scroll to zoom, drag to move,
-  click to choose a spot (RA and Dec fill in, a red ring marks it). Nothing is downloaded until
-  you press **Search**.
+* A plain black grid of the whole sky with degree labels on its edges: hover to read RA / Dec,
+  scroll to zoom, click to choose a spot or drag to select an area (RA, Dec and the field height
+  fill in; a red ring and a dashed field box mark it). Nothing is downloaded until you press
+  **Search**.
+* **HELP** (and **HOW TO USE** on page 2): a one-screen explanation of every control in plain words.
 
 **Page 2 – Explore**, controlled from one toolbar:
 
@@ -51,6 +53,7 @@ This is an independent tool using NASA SPHEREx data from IRSA; it is not an offi
   3″.
 * **Metadata panel.** Date or epoch dates, frames stacked, wavelength (range), band, release, and
   quality flags at the target in plain words (hover for the FITS description).
+* **Target ring.** A red ring with four ticks marks the searched position on every image.
 * **About pop-up.** Click anywhere for position, brightness, change (in Diff), the nearest Gaia
   star and the nearest WISE source, and links to the original FITS files at IRSA.
 * **Shareable URL.** Holds the exact state: position, field, band, view, image shown, mode,
@@ -166,13 +169,8 @@ Then open http://localhost:8000 and pick a preset, or open a link such as
 http://localhost:8000/#ra=269.446259&dec=4.768324 (Barnard's Star).
 
 Settings (environment variables): `ANVIS_COLLECTIONS` (releases, see below), `ANVIS_CACHE_MB`
-(memory cache for frames and stacks, default 300), `ANVIS_DISK_CACHE_MB` (disk cache of
-everything downloaded from IRSA and MAST, default 2000; `0` turns it off), `ANVIS_CACHE`
-(cache folder, default `cache/`).
-
-Speed: the first search of a position downloads from IRSA (seconds to a minute, depending on
-IRSA). Every later search of it – also after restarting the app – comes from the disk cache and
-is near-instant, and keeps working while IRSA is down.
+(memory cache for frames and stacks, default 300), `ANVIS_CACHE` (folder for cached
+wavelength tables, default `cache/`).
 
 ## Deploy (make it public)
 
@@ -244,6 +242,7 @@ python -m pytest -q tests
 | `tests/test_backend.py` | Position and endpoint validation, frame search, retries, partial FITS reads, north-up resampling, quality flags, caches, streaming, Gaia, releases |
 | `tests/test_stack.py` | Epoch grouping, stacking maths (synthetic images with known variance), `/api/stack` |
 | `tests/test_wise.py` | `/api/wise`: TAP, Gator and AllWISE fallbacks, units, validation |
+| `tests/test_compress.py` | gzip-compressed JSON replies |
 | `tests/test_math.py` | `static/anvis-math.js` run in Node: coordinate parsing, difference scale, photometry (skipped without Node) |
 
 Live checks against IRSA and MAST (internet needed; on Windows PowerShell first run

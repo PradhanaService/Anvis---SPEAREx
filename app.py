@@ -23,12 +23,9 @@ Endpoints
   GET  /api/collections  the SPHEREx releases searched (ANVIS_COLLECTIONS) and, at a position,
                          every SPHEREx collection IRSA has there
 
-Caches
-  * In memory: IRSA searches (sia_rows), Gaia and WISE cones (functools.lru_cache); processed
-    frames and stacks (FrameCache, limited by size: ANVIS_CACHE_MB, default 300 MB).
-  * On disk, in cache/data (ANVIS_DISK_CACHE_MB, default 2000 MB): the same searches, frames,
-    stacks and catalogues, so repeat searches are fast after a restart and work while IRSA is
-    down. Searches are refreshed after a day, catalogues after 30 days.
+Caches (all in memory unless noted)
+  * IRSA searches (sia_rows), Gaia and WISE cones: functools.lru_cache.
+  * Processed frames and stacks: FrameCache, limited by size (ANVIS_CACHE_MB, default 300 MB).
   * WCS-WAVE wavelength tables: in memory and on disk in cache/ (ANVIS_CACHE).
 Replies of more than 2 kB of JSON are gzip-compressed when the browser accepts it.
 """
@@ -36,7 +33,6 @@ Replies of more than 2 kB of JSON are gzip-compressed when the browser accepts i
 import concurrent.futures as cf
 import csv
 import gzip
-import hashlib
 import io
 import json
 import logging
@@ -142,31 +138,16 @@ def index():
 SIA_COLUMNS = ("energy_bandpassname", "dataproduct_subtype", "access_url", "obs_id", "obs_collection", "t_min")
 
 
-SIA_FRESH_SECONDS = 86400   # a saved search is reused for a day (new SPHEREx images appear over time)
-
-
 @lru_cache(maxsize=256)
 def sia_rows(ra, dec):
     """All SPHEREx images (every band) covering a position, from IRSA's SIA service. Cached."""
-    key = (ra, dec, COLLECTIONS)
-    saved = disk_get("sia", key, max_age=SIA_FRESH_SECONDS)
-    if saved is not None:
-        return tuple(json.loads(saved))
     params = [("POS", f"circle {ra} {dec} 0.0005"), ("RESPONSEFORMAT", "CSV"), ("MAXREC", "20000")]
     params += [("COLLECTION", c) for c in COLLECTIONS]
-    try:
-        text = remote_get(SIA_URL, params=params, timeout=120).text
-    except Exception:
-        # IRSA is down: an older saved search is better than nothing (new images may be missing).
-        saved = disk_get("sia", key)
-        if saved is None:
-            raise
-        app.logger.warning("SIA failed; using the saved search for %s %s", ra, dec)
-        return tuple(json.loads(saved))
+    # IRSA's SIA often answers 502 in bursts lasting tens of seconds: keep retrying for ~95 s
+    # (25 tries) rather than the default ~35 s, so a search rides out a burst.
+    text = remote_get(SIA_URL, params=params, timeout=120, tries=25).text
     # Keep only the columns used below, so cached searches stay small.
-    rows = tuple({k: row.get(k) for k in SIA_COLUMNS} for row in csv.DictReader(io.StringIO(text)))
-    disk_put("sia", key, json.dumps(rows).encode())
-    return rows
+    return tuple({k: row.get(k) for k in SIA_COLUMNS} for row in csv.DictReader(io.StringIO(text)))
 
 
 @app.get("/api/frames")
@@ -332,76 +313,6 @@ _wave_lock = threading.Lock()
 # WCS-WAVE tables are also saved here, so they survive a server restart.
 CACHE_DIR = os.environ.get("ANVIS_CACHE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "cache"))
 
-# ----------------------------------------------------------------------------- disk cache
-# Everything fetched from IRSA and MAST is also kept on disk (gzip-compressed, in cache/data):
-# searching a position again is then near-instant, also after a restart, and still works for
-# those positions while IRSA is down. At most ANVIS_DISK_CACHE_MB (default 2000 MB; 0 turns it
-# off); the oldest files are removed first.
-DISK_CACHE_DIR = os.path.join(CACHE_DIR, "data")
-DISK_CACHE_MB = float(os.environ.get("ANVIS_DISK_CACHE_MB", 2000))
-_disk_lock = threading.Lock()
-_disk_writes = 0
-
-
-def _disk_path(kind, key):
-    return os.path.join(DISK_CACHE_DIR, f"{kind}-{hashlib.sha1(repr(key).encode()).hexdigest()}.gz")
-
-
-def disk_get(kind, key, max_age=None):
-    """Bytes saved by disk_put, or None (missing, unreadable, or older than max_age seconds)."""
-    if DISK_CACHE_MB <= 0:
-        return None
-    path = _disk_path(kind, key)
-    try:
-        if max_age is not None and time.time() - os.path.getmtime(path) > max_age:
-            return None
-        with open(path, "rb") as f:
-            return gzip.decompress(f.read())
-    except (OSError, EOFError, ValueError):
-        return None
-
-
-def disk_put(kind, key, data):
-    """Save bytes under (kind, key); every 200 writes, trim the cache to its size limit."""
-    global _disk_writes
-    if DISK_CACHE_MB <= 0:
-        return
-    path = _disk_path(kind, key)
-    try:
-        os.makedirs(DISK_CACHE_DIR, exist_ok=True)
-        tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
-        with open(tmp, "wb") as f:
-            f.write(gzip.compress(data, compresslevel=5))
-        os.replace(tmp, path)     # whole files only: a crash never leaves half a file
-    except OSError as e:
-        app.logger.warning("disk cache: could not save %s: %s", kind, e)
-        return
-    with _disk_lock:
-        _disk_writes += 1
-        due = _disk_writes % 200 == 1
-    if due:
-        disk_trim()
-
-
-def disk_trim():
-    """Remove the oldest cache files until the cache is below 90% of its size limit."""
-    try:
-        files = [(e.stat().st_mtime, e.stat().st_size, e.path) for e in os.scandir(DISK_CACHE_DIR) if e.name.endswith(".gz")]
-    except OSError:
-        return
-    total, limit = sum(f[1] for f in files), DISK_CACHE_MB * 1e6
-    if total <= limit:
-        return
-    for _, size, path in sorted(files):
-        try:
-            os.remove(path)
-            total -= size
-        except OSError:
-            pass
-        if total <= 0.9 * limit:
-            break
-
-
 def _wave_path(key):
     """Disk path of the saved WCS-WAVE table for (detector, pipeline version)."""
     name = re.sub(r"[^A-Za-z0-9._-]", "_", f"wcswave_D{key[0]}_{key[1]}")
@@ -553,10 +464,6 @@ def frame_layers(url, ra, dec, size_arcsec, width_arcsec):
     """
     key = ("layers", url, ra, dec, size_arcsec, width_arcsec)
     hit = _frames.get(key)
-    if hit is None:
-        hit = _layers_from_disk(key)
-        if hit is not None:
-            _frames.put(key, hit, size=hit["image"].size * 9 + 1000)
     if hit is not None:
         return hit
     # SPHEREx's detector is rotated differently on every visit, so request a square cutout
@@ -597,31 +504,7 @@ def frame_layers(url, ra, dec, size_arcsec, width_arcsec):
     layers = {"image": out_img.astype(np.float32), "variance": out_var.astype(np.float32), "bad": bad,
               "nx": nx, "ny": ny, "wavelength": wavelength, "mjd": mjd, "version": version, "quality": quality}
     _frames.put(key, layers, size=out_img.size * 9 + 1000)
-    _layers_to_disk(key, layers)
     return layers
-
-
-LAYER_META = ("nx", "ny", "wavelength", "mjd", "version", "quality")
-
-
-def _layers_to_disk(key, L):
-    buf = io.BytesIO()
-    np.savez(buf, image=L["image"], variance=L["variance"], bad=L["bad"],
-             meta=np.array(json.dumps({k: L[k] for k in LAYER_META})))
-    disk_put("layers", key, buf.getvalue())
-
-
-def _layers_from_disk(key):
-    data = disk_get("layers", key)
-    if data is None:
-        return None
-    try:
-        with np.load(io.BytesIO(data)) as z:
-            L = {"image": z["image"], "variance": z["variance"], "bad": z["bad"]}
-            L.update(json.loads(str(z["meta"])))
-        return L
-    except Exception:          # an unreadable file is simply downloaded again
-        return None
 
 
 def make_frame(url, ra, dec, size_arcsec, width_arcsec=None):
@@ -823,17 +706,11 @@ def stack():
     key = ("stack", tuple(sorted(urls))) + args
     text = _frames.get(key)
     if text is None:
-        saved = disk_get("stack", key)
-        text = saved.decode() if saved is not None else None
-    if text is None:
         try:
             text = json.dumps(make_stack(urls, *args), separators=(",", ":"))
         except Exception as e:
             app.logger.warning("stack failed: %s", e)
             return bad(str(e), 502)
-        if json.loads(text).get("n_failed") == 0:     # only complete stacks are kept on disk
-            disk_put("stack", key, text.encode())
-    if _frames.get(key) is None:
         _frames.put(key, text)
     resp = Response(text, mimetype="application/json")
     resp.headers["Cache-Control"] = "public, max-age=86400"
@@ -848,22 +725,8 @@ GAIA_MAX_STARS = 5000
 GAIA_EPOCH = 2016.0   # Gaia DR3 reference epoch (Julian year) for ra, dec
 
 
-CATALOG_FRESH_SECONDS = 30 * 86400   # Gaia and WISE catalogues don't change: keep for 30 days
-
-
 @lru_cache(maxsize=256)
 def gaia_cone(ra, dec, radius_deg, gmax):
-    """gaia_cone_remote through the disk cache."""
-    key = (ra, dec, radius_deg, gmax)
-    saved = disk_get("gaia", key, max_age=CATALOG_FRESH_SECONDS)
-    if saved is not None:
-        return saved.decode()
-    text = gaia_cone_remote(ra, dec, radius_deg, gmax)
-    disk_put("gaia", key, text.encode())
-    return text
-
-
-def gaia_cone_remote(ra, dec, radius_deg, gmax):
     """Gaia DR3 stars brighter than gmax within radius_deg of (ra, dec), as compact JSON text.
 
     Each star is [source_id (text: too big for a JavaScript number), ra, dec, pmra, pmdec,
@@ -957,17 +820,6 @@ def _wise_rows_gator(table, name_col, ra, dec, radius_deg, w2max):
 
 @lru_cache(maxsize=256)
 def wise_cone(ra, dec, radius_deg, w2max):
-    """wise_cone_remote through the disk cache."""
-    key = (ra, dec, radius_deg, w2max)
-    saved = disk_get("wise", key, max_age=CATALOG_FRESH_SECONDS)
-    if saved is not None:
-        return saved.decode()
-    text = wise_cone_remote(ra, dec, radius_deg, w2max)
-    disk_put("wise", key, text.encode())
-    return text
-
-
-def wise_cone_remote(ra, dec, radius_deg, w2max):
     """WISE sources (W2 < w2max) within radius_deg of (ra, dec), brightest in W2 first, as JSON text.
 
     Each source is [name, ra, dec, pmra, pmdec (mas/yr, pmra includes cos dec), W1, W2]; ra, dec

@@ -7,7 +7,7 @@ a { color: #0b0b0b; } a:hover { color: #E03C31; }
 .small { font-size: 11px; }
 [hidden] { display: none !important; }
 button, input, select { font: inherit; }
-.tb:focus-visible, .fld:focus-visible, .range:focus-visible, .pr:focus-visible, .go:focus-visible, .zb:focus-visible,
+.fld:focus-visible, .range:focus-visible, .pr:focus-visible, .go:focus-visible, .zb:focus-visible,
 .pb:focus-visible, .md:focus-visible, .sb:focus-visible, .fr:focus-visible, .cx:focus-visible, .bk:focus-visible,
 .sel:focus-visible, a:focus-visible { outline: 2px solid #E03C31; outline-offset: 2px; }
 
@@ -57,11 +57,6 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 
 .main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 6px; }
 .topbar { flex: none; height: 34px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-.zoomrow { display: flex; align-items: center; gap: 2px; }
-.tb { width: 38px; height: 34px; background: transparent; color: #0b0b0b; border: 0; cursor: pointer; display: flex;
-  align-items: center; justify-content: center; }
-.tb:hover { background: #f0f0f0; }
-.zpct { margin-left: 6px; font-family: 'DM Mono', monospace; font-size: 12px; color: #5c5c5c; }
 
 /* ---------------- sky viewer (both pages): image, overlays, loading ---------------- */
 .sky { position: relative; flex: 1 1 auto; min-height: 0; border: 1px solid #0b0b0b; overflow: hidden;
@@ -74,12 +69,9 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .lblt { display: flex; flex-direction: column; gap: 1px; }
 .lblt b { font-size: 13px; font-weight: 700; }
 .lblt span { font-size: 11px; color: #d0d0d0; }
-.hintbar { left: 10px; bottom: 10px; padding: 4px 8px; background: rgba(0,0,0,.6); color: #d0d0d0; font-size: 11px;
-  pointer-events: auto; max-width: calc(100% - 120px); }
-.hintbar a, .credit a { color: #d0d0d0; }
+.credit a { color: #d0d0d0; }
 .credit { left: 10px; bottom: 10px; padding: 4px 8px; background: rgba(0,0,0,.6); color: #d0d0d0; font-size: 11px;
   pointer-events: auto; max-width: calc(100% - 120px); }
-.region { position: absolute; border: 1px dashed #ffd23f; pointer-events: none; }
 .rtag { position: absolute; left: -1px; top: 0; transform: translateY(-100%); background: #ffd23f; color: #0b0b0b;
   font-family: 'DM Mono', monospace; font-size: 10px; letter-spacing: .06em; padding: 2px 6px; white-space: nowrap; }
 .frameedge { position: absolute; border: 1.5px solid #fff; pointer-events: none; }
@@ -90,9 +82,6 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .hovertag { position: absolute; pointer-events: none; background: rgba(0,0,0,.88); border: 1px solid rgba(255,255,255,.4);
   padding: 6px 10px; font-family: 'DM Mono', monospace; font-size: 12px; line-height: 1.6; white-space: pre; }
 .hovertag b { color: #ff7a5c; font-weight: 400; }
-.selmark { position: absolute; width: 0; height: 0; pointer-events: none; }
-.selmark .ring { position: absolute; width: 30px; height: 30px; left: -15px; top: -15px; border: 2px solid #ff5a3c; border-radius: 50%; }
-.selmark .dot { position: absolute; width: 4px; height: 4px; left: -2px; top: -2px; border-radius: 50%; background: #ff5a3c; }
 .selring { position: absolute; width: 40px; height: 40px; margin: -20px 0 0 -20px; border: 2px solid #ff5a3c; border-radius: 50%;
   pointer-events: none; box-shadow: 0 0 0 4px rgba(255,90,60,.2); }
 .loading { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 10px;
@@ -276,7 +265,7 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
   .app { height: auto; flex: 1 1 auto; }
   .firsthint { position: static; order: -1; transform: none; max-width: none; margin: 6px 8px 0; font-size: 11px; }
   .meta { max-width: calc(100% - 66px); }
-  .hintbar, .credit { font-size: 10px; max-width: calc(100% - 80px); }
+  .credit { font-size: 10px; max-width: calc(100% - 80px); }
   .extop { height: auto; align-items: flex-start; flex-direction: column; gap: 4px; }
   .pop { width: calc(100% - 20px); }
   /* The GAIA label moves under the date label, so it can't run into the credit at the bottom. */
@@ -298,13 +287,23 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 
   /* BLINK / DIFF label: above the credit, so it doesn't cover the date label at the top. */
   .modelbl { font-size: 10px; }
-  .frameedge .rtag { display: none; }   /* no room for it beside the labels; page 1 shows the field size */
+  .frameedge .rtag { display: none; }   /* no room for it beside the labels; the sidebar shows the field size */
 }
 
 /* ---------------- help screens (the i buttons) ---------------- */
-.infobtn { flex: none; width: 26px; height: 26px; display: inline-flex; align-items: center; justify-content: center; padding: 0;
-  background: transparent; color: #0b0b0b; border: 1px solid #d0d0d0; border-radius: 50%; cursor: pointer; }
-.infobtn:hover { background: #f0f0f0; }
+/* Help buttons: red pills with a white i and a label, pulsing gently so they are easy to find
+   (no animation for people who prefer reduced motion). The one on page 2 is larger and sits a
+   little in from the right edge. */
+.infobtn { flex: none; display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px 0 8px;
+  background: #E03C31; color: #fff; border: 0; border-radius: 999px; box-shadow: 0 2px 8px rgba(224,60,49,.45); cursor: pointer;
+  font: 800 11px 'Public Sans', sans-serif; letter-spacing: .08em; animation: helppulse 2s ease-out infinite; }
+.infobtn svg { width: 16px; height: 16px; }
+.infobtn:hover { background: #B42A13; }
+.infotxt { white-space: nowrap; }
+.infobtn.infobig { height: 38px; padding: 0 16px 0 10px; font-size: 13px; margin-right: 18px; }
+.infobtn.infobig svg { width: 19px; height: 19px; }
+@keyframes helppulse { 0% { box-shadow: 0 0 0 0 rgba(224,60,49,.55); } 70% { box-shadow: 0 0 0 10px rgba(224,60,49,0); } 100% { box-shadow: 0 0 0 0 rgba(224,60,49,0); } }
+@media (prefers-reduced-motion: reduce) { .infobtn { animation: none; } }
 .infobtn:focus-visible, .helpx:focus-visible { outline: 2px solid #E03C31; outline-offset: 2px; }
 .extopl { flex: 1; width: 100%; display: flex; align-items: center; gap: 10px; }
 .extopl .infobtn { margin-left: auto; }   /* the i button sits at the right end of the row */
@@ -337,15 +336,6 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 .mapcredit { justify-content: flex-start; font-size: 11px; color: #5c5c5c; }
 .mapcredit a { color: #0b0b0b; }
 
-/* The i (help) button: solid red with a white i, like the app's other main buttons; it pulses
-   gently until it has been opened once (no animation for people who prefer reduced motion). */
-.infobtn { width: 30px; height: 30px; background: #E03C31; color: #fff; border: 0; box-shadow: 0 2px 8px rgba(224,60,49,.45); }
-.infobtn svg { width: 18px; height: 18px; }
-.infobtn:hover { background: #B42A13; }
-.infobtn.attn { animation: helppulse 1.8s ease-out infinite; }
-@keyframes helppulse { 0% { box-shadow: 0 0 0 0 rgba(224,60,49,.55); } 70% { box-shadow: 0 0 0 10px rgba(224,60,49,0); } 100% { box-shadow: 0 0 0 0 rgba(224,60,49,0); } }
-@media (prefers-reduced-motion: reduce) { .infobtn.attn { animation: none; } }
-
 /* Target ring (page 2): marks the searched position – a red ring with four short ticks pointing
    in, open in the middle so the object itself stays visible. */
 .tgtring { position: absolute; width: 34px; height: 34px; margin: -17px 0 0 -17px; border: 2px solid #E03C31; border-radius: 50%;
@@ -359,13 +349,3 @@ select.fld { padding: 4px 8px; font-size: clamp(12px, 1.85vh, 19px); }
 /* Backdrop hint on the sky grid (always shown; clicks pass through it). */
 .mapnote { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 80%; text-align: center;
   font-size: clamp(14px, 2.2vw, 22px); font-weight: 600; color: rgba(255,255,255,.38); pointer-events: none; }
-
-/* Help buttons: red pills with a white i and a label, pulsing gently so they are easy to find.
-   The one on page 2 is larger and sits a little in from the right edge. */
-.infobtn { width: auto; height: 32px; gap: 6px; padding: 0 12px 0 8px; border-radius: 999px;
-  font: 800 11px 'Public Sans', sans-serif; letter-spacing: .08em; animation: helppulse 2s ease-out infinite; }
-.infobtn svg { width: 16px; height: 16px; }
-.infotxt { white-space: nowrap; }
-.infobtn.infobig { height: 38px; padding: 0 16px 0 10px; font-size: 13px; margin-right: 18px; }
-.infobtn.infobig svg { width: 19px; height: 19px; }
-@media (prefers-reduced-motion: reduce) { .infobtn { animation: none; } }
